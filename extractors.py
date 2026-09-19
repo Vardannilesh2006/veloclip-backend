@@ -216,12 +216,101 @@ class MediaExtractor:
                 info = ydl.extract_info(url, download=False)
                 return self._format_ytdlp_info(info, platform="youtube", original_url=url)
         except Exception as e:
+            # yt-dlp occasionally cannot obtain a player response from cloud
+            # datacentres.  Keep the download service available by resolving
+            # the public metadata through an Invidious instance instead.
+            fallback = self._extract_youtube_invidious(url)
+            if fallback:
+                return fallback
             return {
                 "success": False,
                 "platform": "youtube",
                 "error": "Failed to parse YouTube media. Please check URL.",
                 "details": str(e)
             }
+
+    def _extract_youtube_invidious(self, url: str) -> Optional[Dict[str, Any]]:
+        parsed = urllib.parse.urlparse(url)
+        video_id = ""
+        if parsed.netloc.lower().endswith("youtu.be"):
+            video_id = parsed.path.strip("/").split("/")[0]
+        else:
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+            if not video_id and "/shorts/" in parsed.path:
+                video_id = parsed.path.split("/shorts/", 1)[1].split("/", 1)[0]
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            return None
+
+        instances = [
+            "https://invidious.f5.si",
+            "https://inv.vern.cc",
+        ]
+        for instance in instances:
+            try:
+                response = requests.get(
+                    f"{instance}/api/v1/videos/{video_id}",
+                    headers=anti_ban.get_generic_headers(referer="https://www.youtube.com/"),
+                    timeout=10,
+                )
+                if response.status_code != 200:
+                    continue
+                data = response.json()
+                formats = data.get("formatStreams", []) + data.get("adaptiveFormats", [])
+                streams = []
+                seen = set()
+                for item in formats:
+                    media_url = item.get("url")
+                    mime = item.get("type", "")
+                    itag = item.get("itag")
+                    if not media_url or itag in seen:
+                        continue
+                    seen.add(itag)
+                    if mime.startswith("video/"):
+                        try:
+                            height = int(item.get("height") or 0)
+                        except (TypeError, ValueError):
+                            height = 0
+                        streams.append({
+                            "type": "video",
+                            "quality": f"{height}p" if height else "HD",
+                            "format": "mp4" if "mp4" in mime else "webm",
+                            "url": media_url,
+                            "height": height,
+                            "label": f"Video {height}p" if height else "Video HD",
+                        })
+                    elif mime.startswith("audio/"):
+                        try:
+                            abr = int(item.get("bitrate") or 0)
+                        except (TypeError, ValueError):
+                            abr = 0
+                        streams.append({
+                            "type": "audio",
+                            "quality": f"{int(abr / 1000)} kbps" if abr else "Audio",
+                            "format": "mp3",
+                            "url": media_url,
+                            "label": "Extract Audio (MP3)",
+                        })
+
+                if streams:
+                    streams.sort(key=lambda stream: (stream["type"] != "video", -stream.get("height", 0)))
+                    return {
+                        "success": True,
+                        "platform": "youtube",
+                        "title": data.get("title", "YouTube Video"),
+                        "caption": data.get("description", "")[:300],
+                        "author": data.get("author", "YouTube Creator"),
+                        "thumbnail": (data.get("videoThumbnails") or [{}])[-1].get("url", ""),
+                        "duration": data.get("lengthSeconds", 0),
+                        "views": data.get("viewCount", 0),
+                        "likes": data.get("likeCount", 0),
+                        "hashtags": data.get("keywords", [])[:15],
+                        "streams": streams,
+                        "original_url": url,
+                    }
+            except (requests.RequestException, ValueError, TypeError):
+                continue
+        return None
 
     def extract_facebook(self, url: str) -> Dict[str, Any]:
         try:
