@@ -4,7 +4,8 @@
     runtime: python
     region: oregon
     plan: free
-    buildCommand: pip install -r requirements.txt
+    # Do not reuse an old cached media extractor: platform parsers change often.
+    buildCommand: pip install --upgrade -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
     envVars:
       - key: PORT
