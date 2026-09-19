@@ -249,7 +249,10 @@ class MediaExtractor:
         for instance in instances:
             try:
                 response = requests.get(
-                    f"{instance}/api/v1/videos/{video_id}",
+                    # Use the instance's playback proxy. Raw googlevideo URLs
+                    # are signed to the resolver IP and otherwise fail later
+                    # when the Render streaming worker fetches them.
+                    f"{instance}/api/v1/videos/{video_id}?local=true",
                     headers=anti_ban.get_generic_headers(referer="https://www.youtube.com/"),
                     timeout=10,
                 )
