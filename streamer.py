@@ -1,0 +1,87 @@
+import re
+import subprocess
+import requests
+from flask import Response, stream_with_context
+from typing import Generator
+from anti_ban import anti_ban
+
+def clean_filename(filename: str) -> str:
+    cleaned = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    return cleaned[:100]
+
+def stream_media(media_url: str, filename: str, content_type: str = "video/mp4", convert_to_mp3: bool = False, start_time: str = None, duration: str = None):
+    """
+    Zero-Storage Streaming Proxy:
+    Streams media chunks directly from upstream CDN to the client browser.
+    Zero disk storage used on server.
+    """
+    clean_name = clean_filename(filename)
+    headers = anti_ban.get_generic_headers()
+
+    if convert_to_mp3:
+        # On-the-fly audio extraction & trimming using FFmpeg pipe (Zero disk storage)
+        cmd = ["ffmpeg"]
+        if start_time:
+            cmd.extend(["-ss", str(start_time)])
+        cmd.extend([
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+            "-i", media_url,
+        ])
+        if duration:
+            cmd.extend(["-t", str(duration)])
+        cmd.extend([
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-ab", "320k",
+            "-f", "mp3",
+            "pipe:1"
+        ])
+
+        def generate_audio_stream() -> Generator[bytes, None, None]:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=64 * 1024)
+            try:
+                while True:
+                    chunk = proc.stdout.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                proc.stdout.close()
+                proc.kill()
+
+        return Response(
+            stream_with_context(generate_audio_stream()),
+            content_type="audio/mpeg",
+            headers={
+                "Content-Disposition": f'attachment; filename="{clean_name}.mp3"',
+                "Cache-Control": "public, max-age=3600",
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
+
+    # Standard Direct Video/Photo Chunked Streaming
+    try:
+        req = requests.get(media_url, headers=headers, stream=True, timeout=15)
+        response_headers = {
+            "Content-Disposition": f'attachment; filename="{clean_name}"',
+            "Content-Type": req.headers.get("Content-Type", content_type),
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=7200"
+        }
+        if "Content-Length" in req.headers:
+            response_headers["Content-Length"] = req.headers["Content-Length"]
+
+        def generate_chunks() -> Generator[bytes, None, None]:
+            for chunk in req.iter_content(chunk_size=128 * 1024):
+                if chunk:
+                    yield chunk
+
+        return Response(
+            stream_with_context(generate_chunks()),
+            status=req.status_code,
+            headers=response_headers
+        )
+    except Exception as e:
+        return Response(f"Stream error: {str(e)}", status=502)
