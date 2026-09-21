@@ -225,6 +225,11 @@ class MediaExtractor:
         try:
             ydl_opts = dict(self.ydl_opts_base)
             ydl_opts['http_headers'] = anti_ban.get_generic_headers(referer="https://www.youtube.com/")
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'mweb'],
+                }
+            }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
