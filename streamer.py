@@ -51,11 +51,12 @@ def stream_media(media_url: str, filename: str, content_type: str = "video/mp4",
                 proc.stdout.close()
                 proc.kill()
 
+        audio_name = f"{clean_name.rsplit('.', 1)[0]}.mp3"
         return Response(
             stream_with_context(generate_audio_stream()),
             content_type="audio/mpeg",
             headers={
-                "Content-Disposition": f'attachment; filename="{clean_name}.mp3"',
+                "Content-Disposition": f'attachment; filename="{audio_name}"',
                 "Cache-Control": "public, max-age=3600",
                 "Access-Control-Allow-Origin": "*"
             }
@@ -64,6 +65,8 @@ def stream_media(media_url: str, filename: str, content_type: str = "video/mp4",
     # Standard Direct Video/Photo Chunked Streaming
     try:
         req = requests.get(media_url, headers=headers, stream=True, timeout=15)
+        if not req.ok:
+            return Response("Upstream media is unavailable", status=req.status_code)
         response_headers = {
             "Content-Disposition": f'attachment; filename="{clean_name}"',
             "Content-Type": req.headers.get("Content-Type", content_type),

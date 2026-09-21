@@ -384,28 +384,40 @@ class MediaExtractor:
             ext = f.get("ext", "mp4")
             height = f.get("height")
             direct_url = f.get("url")
+            format_id = str(f.get("format_id") or "")
 
             if not direct_url:
                 continue
 
-            # Video streams with both audio and video or top video
+            # Keep server-side merge jobs within the limits of the hosted worker.
+            # Higher resolutions are often gigabytes for a short clip and make a
+            # free/shared instance unavailable for every other download.
+            if vcodec != "none" and height and height > 1080:
+                continue
+
+            # Adaptive video tracks do not contain audio. Keep that fact explicit
+            # so the download endpoint can mux them with audio instead of serving
+            # a misleading silent "MP4" file.
             if vcodec != "none" and direct_url:
                 quality_label = f"{height}p" if height else "HD"
                 streams.append({
                     "type": "video",
-                    "quality": quality_label,
+                    "quality": f"{quality_label} — Audio + Video" if acodec != "none" else f"{quality_label} — Video + Audio Merge",
                     "format": ext,
                     "url": direct_url,
                     "height": height or 720,
+                    "format_id": format_id,
+                    "has_audio": acodec != "none",
                     "label": f"Video {quality_label} ({ext.upper()})"
                 })
             elif acodec != "none" and vcodec == "none" and direct_url:
                 abr = f.get("abr", 128)
                 audio_streams.append({
                     "type": "audio",
-                    "quality": f"{int(abr)} kbps" if abr else "128 kbps",
+                    "quality": f"{int(abr)} kbps source" if abr else "Source audio",
                     "format": "mp3",
                     "url": direct_url,
+                    "format_id": format_id,
                     "label": f"Audio MP3 ({int(abr) if abr else 128}k)"
                 })
 
