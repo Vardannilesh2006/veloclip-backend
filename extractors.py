@@ -1,7 +1,8 @@
 import re
 import json
 import urllib.parse
-from typing import Dict, Any, Optional, List
+import os
+import tempfile
 import requests
 import yt_dlp
 
@@ -65,28 +66,41 @@ class MediaExtractor:
     def extract_instagram(self, url: str) -> Dict[str, Any]:
         shortcode = extract_instagram_shortcode(url)
         
-        # Tier 1: Try Mobile Web GraphQL / Info API
+        # Tier 1: Try Mobile Web GraphQL with 2026 doc_id
         if shortcode:
             try:
                 headers = anti_ban.get_instagram_headers(referer=url)
-                api_url = f"https://www.instagram.com/graphql/query/?doc_id=17867956176966166&variables={{\"shortcode\":\"{shortcode}\"}}"
-                resp = requests.get(api_url, headers=headers, timeout=6)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    shortcode_media = data.get("data", {}).get("xdt_shortcode_media") or data.get("data", {}).get("shortcode_media")
-                    if shortcode_media:
-                        return self._format_instagram_graphql_data(shortcode_media, url)
-            except Exception as e:
-                # Log and fallback to Tier 2
+                doc_ids = ["9510064595728286", "17867956176966166"]
+                for doc_id in doc_ids:
+                    try:
+                        api_url = f"https://www.instagram.com/graphql/query/?doc_id={doc_id}&variables={{\"shortcode\":\"{shortcode}\"}}"
+                        resp = requests.get(api_url, headers=headers, timeout=6)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            shortcode_media = data.get("data", {}).get("xdt_shortcode_media") or data.get("data", {}).get("shortcode_media")
+                            if shortcode_media:
+                                return self._format_instagram_graphql_data(shortcode_media, url)
+                    except Exception:
+                        continue
+            except Exception:
                 pass
 
-        # Tier 2: yt-dlp with anti-bot arguments
+        # Tier 2: yt-dlp with anti-bot arguments and optional session cookies
         try:
             ydl_opts = dict(self.ydl_opts_base)
             ydl_opts['http_headers'] = anti_ban.get_instagram_headers(referer=url)
             proxy_info = anti_ban.get_proxy()
             if proxy_info and 'https' in proxy_info:
                 ydl_opts['proxy'] = proxy_info['https']
+
+            cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "cookies.txt"
+            if os.path.exists(cookie_file):
+                ydl_opts['cookiefile'] = cookie_file
+            elif os.environ.get("INSTAGRAM_COOKIES"):
+                temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_ig_cookies.txt")
+                with open(temp_cookie_path, "w", encoding="utf-8") as f:
+                    f.write(os.environ["INSTAGRAM_COOKIES"])
+                ydl_opts['cookiefile'] = temp_cookie_path
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)

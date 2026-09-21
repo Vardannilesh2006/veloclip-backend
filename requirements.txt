@@ -1,8 +1,7 @@
 flask
 flask-cors
 requests
-# Pin a recent extractor release.  Unpinned installs on Render can stay on a
-# cached, obsolete yt-dlp build after YouTube changes its player response.
-yt-dlp>=2025.12.08
+# Pin latest 2026 extractor release to ensure YouTube & Instagram format support
+yt-dlp>=2026.8.19
 python-dotenv
 gunicorn
