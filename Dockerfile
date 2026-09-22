@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
-# Install system dependencies including FFmpeg for video/audio muxing and curl for health checks
+# Install system dependencies including FFmpeg for video/audio muxing, nodejs for JS challenges, and curl
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    nodejs \
     curl \
     git \
     ca-certificates \
@@ -19,13 +20,13 @@ RUN pip install --no-cache-dir -U pip setuptools wheel && \
 # Copy application files
 COPY . .
 
-# Create non-root user for Hugging Face Spaces security standards
+# Create non-root user
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app
 USER appuser
 
-# Hugging Face Spaces standard port is 7860
-EXPOSE 7860
+# Expose port (Render uses 10000, Hugging Face uses 7860)
+EXPOSE 7860 10000
 
-# Run Gunicorn with 4 workers and 120s timeout
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:7860", "--timeout", "120", "app:app"]
+# Run Gunicorn with dynamic PORT support
+CMD ["sh", "-c", "gunicorn -w 4 -b 0.0.0.0:${PORT:-7860} --timeout 120 app:app"]

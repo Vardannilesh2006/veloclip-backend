@@ -5,3 +5,4 @@ requests
 yt-dlp>=2026.8.19
 python-dotenv
 gunicorn
+imageio-ffmpeg

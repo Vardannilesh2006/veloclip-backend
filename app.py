@@ -14,6 +14,12 @@ from extractors import extractor, detect_platform
 from streamer import stream_media
 from ai_features import analyze_viral_metadata, generate_mock_subtitles
 
+try:
+    import imageio_ffmpeg
+    FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    FFMPEG_BIN = "ffmpeg"
+
 app = Flask(__name__)
 # Enable CORS for Next.js frontend running locally or in production
 CORS(app, resources={r"/api/*": {"origins": "*"}}, expose_headers=["Content-Disposition", "Content-Length"])
@@ -155,12 +161,10 @@ def verified_download():
     output_path: Path | None = None
     try:
         common_args = {
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "ios", "mweb", "web_creator"],
-                }
-            },
             "nocheckcertificate": True,
+            "remote_components": ["ejs:github"],
+            "js_runtimes": {"node": {}},
+            "ffmpeg_location": FFMPEG_BIN,
         }
         cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "cookies.txt"
         if os.path.exists(cookie_file):

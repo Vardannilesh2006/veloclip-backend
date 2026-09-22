@@ -47,6 +47,8 @@ class MediaExtractor:
             'skip_download': True,
             'extract_flat': False,
             'nocheckcertificate': True,
+            'remote_components': ['ejs:github'],
+            'js_runtimes': {'node': {}},
         }
 
     def extract(self, url: str) -> Dict[str, Any]:
@@ -225,11 +227,7 @@ class MediaExtractor:
         try:
             ydl_opts = dict(self.ydl_opts_base)
             ydl_opts['http_headers'] = anti_ban.get_generic_headers(referer="https://www.youtube.com/")
-            ydl_opts['extractor_args'] = {
-                'youtube': {
-                    'player_client': ['android', 'ios', 'mweb', 'web_creator'],
-                }
-            }
+            
             cookie_file = os.environ.get("YOUTUBE_COOKIES_FILE") or "cookies.txt"
             if os.path.exists(cookie_file):
                 ydl_opts['cookiefile'] = cookie_file

@@ -5,6 +5,12 @@ from flask import Response, stream_with_context
 from typing import Generator
 from anti_ban import anti_ban
 
+try:
+    import imageio_ffmpeg
+    FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    FFMPEG_BIN = "ffmpeg"
+
 def clean_filename(filename: str) -> str:
     cleaned = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
     return cleaned[:100]
@@ -20,7 +26,7 @@ def stream_media(media_url: str, filename: str, content_type: str = "video/mp4",
 
     if convert_to_mp3:
         # On-the-fly audio extraction & trimming using FFmpeg pipe (Zero disk storage)
-        cmd = ["ffmpeg"]
+        cmd = [FFMPEG_BIN]
         if start_time:
             cmd.extend(["-ss", str(start_time)])
         cmd.extend([
