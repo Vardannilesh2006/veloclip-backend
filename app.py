@@ -55,7 +55,7 @@ def health_check():
     return jsonify({
         "status": "online",
         "service": "VeloClip Core Engine (2026 Edition)",
-        "version": "2.4.0",
+        "version": "2.5.0",
         "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok"],
         "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp"]
     })
