@@ -95,7 +95,9 @@ class MediaExtractor:
             if proxy_info and 'https' in proxy_info:
                 ydl_opts['proxy'] = proxy_info['https']
 
-            cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "cookies.txt"
+            cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "ig_cookies.txt"
+            if not os.path.exists(cookie_file) and os.path.exists("cookies.txt"):
+                cookie_file = "cookies.txt"
             if os.path.exists(cookie_file):
                 ydl_opts['cookiefile'] = cookie_file
             elif os.environ.get("INSTAGRAM_COOKIES"):

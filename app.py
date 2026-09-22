@@ -55,7 +55,7 @@ def health_check():
     return jsonify({
         "status": "online",
         "service": "VeloClip Core Engine (2026 Edition)",
-        "version": "2.5.0",
+        "version": "2.6.0",
         "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok"],
         "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp"]
     })
@@ -166,10 +166,21 @@ def verified_download():
             "js_runtimes": {"node": {}},
             "ffmpeg_location": FFMPEG_BIN,
         }
-        cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "cookies.txt"
+        is_ig = "instagram.com" in source_url or "instagr.am" in source_url
+        cookie_file = "ig_cookies.txt" if is_ig else "cookies.txt"
+        if is_ig and os.environ.get("INSTAGRAM_COOKIES_FILE"):
+            cookie_file = os.environ["INSTAGRAM_COOKIES_FILE"]
+        elif not is_ig and os.environ.get("YOUTUBE_COOKIES_FILE"):
+            cookie_file = os.environ["YOUTUBE_COOKIES_FILE"]
+
         if os.path.exists(cookie_file):
             common_args["cookiefile"] = cookie_file
-        elif os.environ.get("YOUTUBE_COOKIES"):
+        elif is_ig and os.environ.get("INSTAGRAM_COOKIES"):
+            temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_ig_cookies.txt")
+            with open(temp_cookie_path, "w", encoding="utf-8") as f:
+                f.write(os.environ["INSTAGRAM_COOKIES"])
+            common_args["cookiefile"] = temp_cookie_path
+        elif not is_ig and os.environ.get("YOUTUBE_COOKIES"):
             temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_yt_cookies.txt")
             with open(temp_cookie_path, "w", encoding="utf-8") as f:
                 f.write(os.environ["YOUTUBE_COOKIES"])
