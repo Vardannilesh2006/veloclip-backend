@@ -50,6 +50,22 @@ def is_public_http_url(url: str) -> bool:
     except ValueError:
         return False
 
+def init_cookie_files():
+    if os.environ.get("YOUTUBE_COOKIES") and (not os.path.exists("cookies.txt") or os.path.getsize("cookies.txt") < 50):
+        try:
+            with open("cookies.txt", "w", encoding="utf-8") as f:
+                f.write(os.environ["YOUTUBE_COOKIES"])
+        except Exception:
+            pass
+    if os.environ.get("INSTAGRAM_COOKIES") and (not os.path.exists("ig_cookies.txt") or os.path.getsize("ig_cookies.txt") < 50):
+        try:
+            with open("ig_cookies.txt", "w", encoding="utf-8") as f:
+                f.write(os.environ["INSTAGRAM_COOKIES"])
+        except Exception:
+            pass
+
+init_cookie_files()
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -58,6 +74,26 @@ def health_check():
         "version": "2.6.0",
         "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok"],
         "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp"]
+    })
+
+@app.route('/api/cookies/status', methods=['GET'])
+def cookies_status():
+    yt_has_file = os.path.exists("cookies.txt") and os.path.getsize("cookies.txt") > 50
+    ig_has_file = os.path.exists("ig_cookies.txt") and os.path.getsize("ig_cookies.txt") > 50
+    yt_has_env = bool(os.environ.get("YOUTUBE_COOKIES"))
+    ig_has_env = bool(os.environ.get("INSTAGRAM_COOKIES"))
+    return jsonify({
+        "youtube": {
+            "has_file": yt_has_file,
+            "has_env": yt_has_env,
+            "ready": yt_has_file or yt_has_env
+        },
+        "instagram": {
+            "has_file": ig_has_file,
+            "has_env": ig_has_env,
+            "ready": ig_has_file or ig_has_env
+        },
+        "server_version": "2.6.0"
     })
 
 @app.route('/api/extract', methods=['POST'])
