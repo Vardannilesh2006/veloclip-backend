@@ -227,9 +227,18 @@ class MediaExtractor:
             ydl_opts['http_headers'] = anti_ban.get_generic_headers(referer="https://www.youtube.com/")
             ydl_opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['android', 'ios', 'mweb'],
+                    'player_client': ['android', 'ios', 'mweb', 'web_creator'],
                 }
             }
+            cookie_file = os.environ.get("YOUTUBE_COOKIES_FILE") or "cookies.txt"
+            if os.path.exists(cookie_file):
+                ydl_opts['cookiefile'] = cookie_file
+            elif os.environ.get("YOUTUBE_COOKIES"):
+                temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_yt_cookies.txt")
+                if not os.path.exists(temp_cookie_path):
+                    with open(temp_cookie_path, "w", encoding="utf-8") as f:
+                        f.write(os.environ["YOUTUBE_COOKIES"])
+                ydl_opts['cookiefile'] = temp_cookie_path
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)

@@ -83,13 +83,17 @@ def extract_media():
                     filename = f"veloclip_{result.get('platform')}_{stream.get('quality', 'hd')}.{fmt}"
                     
                     format_id = str(stream.get("format_id") or "")
-                    # Formats resolved by yt-dlp are often CDN URLs tied to the
-                    # resolver's IP. Re-resolve from the same backend process so
-                    # adaptive video can be merged with audio reliably.
-                    if format_id and result.get("original_url"):
+                    is_youtube = result.get("platform") == "youtube"
+                    is_hls = ".m3u8" in raw_url or "manifest.googlevideo.com" in raw_url
+                    
+                    # Formats resolved by yt-dlp, HLS manifests, or YouTube videos must be
+                    # re-resolved and muxed with audio in the backend process using FFmpeg.
+                    # This ensures the user downloads a real, playable .mp4 with sound, never a silent track or .m3u8 text file.
+                    if (format_id or is_youtube or is_hls) and result.get("original_url"):
+                        target_fid = format_id if format_id else ("bestaudio/best" if stream_type == "audio" else "bestvideo+bestaudio/best")
                         download_query = {
                             "source_url": result["original_url"],
-                            "format_id": format_id,
+                            "format_id": target_fid,
                             "filename": filename,
                             "audio_only": "1" if stream_type == "audio" else "0",
                         }
@@ -150,9 +154,27 @@ def verified_download():
     output_template = str(workdir / "media.%(ext)s")
     output_path: Path | None = None
     try:
+        common_args = {
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "mweb", "web_creator"],
+                }
+            },
+            "nocheckcertificate": True,
+        }
+        cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "cookies.txt"
+        if os.path.exists(cookie_file):
+            common_args["cookiefile"] = cookie_file
+        elif os.environ.get("YOUTUBE_COOKIES"):
+            temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_yt_cookies.txt")
+            with open(temp_cookie_path, "w", encoding="utf-8") as f:
+                f.write(os.environ["YOUTUBE_COOKIES"])
+            common_args["cookiefile"] = temp_cookie_path
+
         if audio_only:
             options = {
-                "format": format_id,
+                **common_args,
+                "format": f"{format_id}/bestaudio/best",
                 "outtmpl": output_template,
                 "quiet": True,
                 "no_warnings": True,
@@ -162,7 +184,8 @@ def verified_download():
             }
         else:
             options = {
-                "format": f"{format_id}+bestaudio/best",
+                **common_args,
+                "format": f"{format_id}+bestaudio/best/{format_id}/best",
                 "outtmpl": output_template,
                 "merge_output_format": "mp4",
                 "quiet": True,
