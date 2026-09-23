@@ -66,14 +66,36 @@ def init_cookie_files():
 
 init_cookie_files()
 
+# ── In-memory platform success/fail counters (reset on restart) ─────────────
+import threading
+from datetime import datetime
+
+_stats_lock = threading.Lock()
+PLATFORM_STATS: dict = {}
+
+def _record_stat(platform: str, success: bool):
+    with _stats_lock:
+        if platform not in PLATFORM_STATS:
+            PLATFORM_STATS[platform] = {"success": 0, "fail": 0, "last_seen": None}
+        key = "success" if success else "fail"
+        PLATFORM_STATS[platform][key] += 1
+        PLATFORM_STATS[platform]["last_seen"] = datetime.utcnow().isoformat() + "Z"
+
+# ── Concurrency semaphore (max 2 concurrent extraction jobs) ─────────────────
+import threading as _threading
+_semaphore = _threading.Semaphore(2)
+_active_jobs = 0
+_waiting_jobs = 0
+_jobs_lock = _threading.Lock()
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
         "status": "online",
         "service": "VeloClip Core Engine (2026 Edition)",
-        "version": "2.7.0",
-        "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok", "pinterest", "reddit"],
-        "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp"]
+        "version": "3.0.0",
+        "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok", "snapchat", "pinterest", "reddit"],
+        "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp", "job_queue", "platform_stats"]
     })
 
 @app.route('/api/cookies/status', methods=['GET'])
@@ -93,7 +115,38 @@ def cookies_status():
             "has_env": ig_has_env,
             "ready": ig_has_file or ig_has_env
         },
-        "server_version": "2.7.0"
+        "server_version": "3.0.0"
+    })
+
+@app.route('/api/stats', methods=['GET'])
+def platform_stats():
+    """Platform-wise success/fail counters since last restart."""
+    with _stats_lock:
+        snapshot = {k: dict(v) for k, v in PLATFORM_STATS.items()}
+    total_success = sum(v["success"] for v in snapshot.values())
+    total_fail = sum(v["fail"] for v in snapshot.values())
+    total = total_success + total_fail
+    return jsonify({
+        "platforms": snapshot,
+        "totals": {
+            "success": total_success,
+            "fail": total_fail,
+            "total": total,
+            "success_rate": round(total_success / total * 100, 1) if total > 0 else 0
+        },
+        "active_jobs": _active_jobs,
+        "waiting_jobs": _waiting_jobs
+    })
+
+@app.route('/api/queue/status', methods=['GET'])
+def queue_status():
+    """Current job queue status."""
+    return jsonify({
+        "active": _active_jobs,
+        "waiting": _waiting_jobs,
+        "max_concurrent": 2,
+        "queue_enabled": True,
+        "queue_type": "threading.Semaphore"
     })
 
 @app.route('/api/extract', methods=['POST'])
@@ -104,9 +157,30 @@ def extract_media():
     if not url:
         return jsonify({"success": False, "error": "URL parameter is required"}), 400
 
+    # Enforce max 2 concurrent extractions to protect Render free tier RAM
+    global _active_jobs, _waiting_jobs
+    with _jobs_lock:
+        _waiting_jobs += 1
+
+    acquired = _semaphore.acquire(timeout=30)  # Wait up to 30 seconds for a slot
+
+    with _jobs_lock:
+        _waiting_jobs -= 1
+        if acquired:
+            _active_jobs += 1
+
+    if not acquired:
+        return jsonify({
+            "success": False,
+            "error": "Server is busy processing other requests. Please retry in a few seconds.",
+            "queue_full": True
+        }), 503
+
     try:
         result = extractor.extract(url)
-        
+        platform = result.get("platform", "unknown")
+        _record_stat(platform, result.get("success", False))
+
         if result.get("success"):
             # Append AI Viral Analytics to result
             title = result.get("title", "")
@@ -123,11 +197,11 @@ def extract_media():
                     stream_type = stream.get("type", "video")
                     fmt = stream.get("format", "mp4")
                     filename = f"veloclip_{result.get('platform')}_{stream.get('quality', 'hd')}.{fmt}"
-                    
+
                     format_id = str(stream.get("format_id") or "")
                     is_youtube = result.get("platform") == "youtube"
                     is_hls = ".m3u8" in raw_url or "manifest.googlevideo.com" in raw_url
-                    
+
                     # Formats resolved by yt-dlp, HLS manifests, or YouTube videos must be
                     # re-resolved and muxed with audio in the backend process using FFmpeg.
                     # This ensures the user downloads a real, playable .mp4 with sound, never a silent track or .m3u8 text file.
@@ -157,6 +231,12 @@ def extract_media():
             "error": "Server encountered an error while analyzing this media link.",
             "details": str(e)
         }), 500
+    finally:
+        # Only release if we actually acquired
+        _semaphore.release()
+        with _jobs_lock:
+            _active_jobs -= 1
+
 
 @app.route('/api/stream', methods=['GET'])
 def proxy_stream():

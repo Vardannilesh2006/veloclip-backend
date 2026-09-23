@@ -1,0 +1,55 @@
+name: Weekly yt-dlp Auto-Update
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:   # Allow manual trigger from GitHub Actions UI
+
+jobs:
+  update-ytdlp:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Needed to push updated requirements.txt
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Get current yt-dlp version
+        id: before
+        run: |
+          pip install yt-dlp --quiet
+          echo "version=$(pip show yt-dlp | grep '^Version:' | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Upgrade yt-dlp to latest
+        run: pip install -U yt-dlp --quiet
+
+      - name: Get new yt-dlp version
+        id: after
+        run: |
+          echo "version=$(pip show yt-dlp | grep '^Version:' | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Update requirements.txt pin
+        run: |
+          NEW_VERSION="${{ steps.after.outputs.version }}"
+          sed -i "s/^yt-dlp>=.*/yt-dlp>=${NEW_VERSION}/" requirements.txt
+          echo "Updated requirements.txt to yt-dlp>=${NEW_VERSION}"
+
+      - name: Commit and push if changed
+        run: |
+          git config --global user.email "bot@veloclip.app"
+          git config --global user.name "VeloClip Bot"
+          git add requirements.txt
+          if git diff --staged --quiet; then
+            echo "No changes to commit — yt-dlp already at latest version."
+          else
+            git commit -m "chore: bump yt-dlp from ${{ steps.before.outputs.version }} to ${{ steps.after.outputs.version }}"
+            git push
+            echo "Pushed yt-dlp update: ${{ steps.before.outputs.version }} → ${{ steps.after.outputs.version }}"
+          fi

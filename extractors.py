@@ -105,20 +105,39 @@ class MediaExtractor:
             if proxy_info and 'https' in proxy_info:
                 ydl_opts['proxy'] = proxy_info['https']
 
-            cookie_file = os.environ.get("INSTAGRAM_COOKIES_FILE") or "ig_cookies.txt"
-            if not os.path.exists(cookie_file) and os.path.exists("cookies.txt"):
-                cookie_file = "cookies.txt"
-            if os.path.exists(cookie_file):
+            cookie_file = os.environ.get('INSTAGRAM_COOKIES_FILE') or 'ig_cookies.txt'
+            if not os.path.exists(cookie_file) and os.path.exists('cookies.txt'):
+                cookie_file = 'cookies.txt'
+
+            # Validate cookies before using them (expired cookies cause hard fails)
+            cookies_valid = False
+            if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100:
+                try:
+                    val_resp = requests.get(
+                        'https://www.instagram.com/api/v1/accounts/current_user/?edit=true',
+                        headers=anti_ban.get_instagram_headers(referer='https://www.instagram.com/'),
+                        cookies={
+                            line.split('\t')[5]: line.split('\t')[6].strip()
+                            for line in open(cookie_file).readlines()
+                            if not line.startswith('#') and line.strip() and len(line.split('\t')) >= 7
+                        },
+                        timeout=4
+                    )
+                    cookies_valid = val_resp.status_code == 200
+                except Exception:
+                    cookies_valid = False
+
+            if cookies_valid:
                 ydl_opts['cookiefile'] = cookie_file
-            elif os.environ.get("INSTAGRAM_COOKIES"):
-                temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_ig_cookies.txt")
-                with open(temp_cookie_path, "w", encoding="utf-8") as f:
-                    f.write(os.environ["INSTAGRAM_COOKIES"])
+            elif os.environ.get('INSTAGRAM_COOKIES'):
+                temp_cookie_path = os.path.join(tempfile.gettempdir(), 'veloclip_ig_cookies.txt')
+                with open(temp_cookie_path, 'w', encoding='utf-8') as f:
+                    f.write(os.environ['INSTAGRAM_COOKIES'])
                 ydl_opts['cookiefile'] = temp_cookie_path
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                return self._format_ytdlp_info(info, platform="instagram", original_url=url)
+                return self._format_ytdlp_info(info, platform='instagram', original_url=url)
         except Exception as e:
             # Tier 3: Attempt direct webpage metadata scraping
             return self._scrape_instagram_meta(url, str(e))
@@ -298,10 +317,7 @@ class MediaExtractor:
 
         piped_mirrors = [
             "https://api.piped.private.coffee",
-            "https://pipedapi.tokhmi.xyz",
-            "https://piped-api.lunar.icu",
-            "https://pipedapi.leptons.xyz",
-            "https://piped-api.garudalinux.org"
+            # Other mirrors removed — all returning 502/503 as of Sept 2026
         ]
         for m in piped_mirrors:
             try:
@@ -430,52 +446,123 @@ class MediaExtractor:
             except (requests.RequestException, ValueError, TypeError):
                 continue
     def extract_tiktok(self, url: str) -> Dict[str, Any]:
-        # Tier 1: High-speed zero watermark TikWM API
+        # Tier 1: TikWM API — fastest, no-watermark, high-quality
         try:
-            resp = requests.get(f"https://www.tikwm.com/api/?url={urllib.parse.quote(url)}", headers=anti_ban.get_generic_headers(), timeout=6)
+            resp = requests.get(
+                f"https://www.tikwm.com/api/?url={urllib.parse.quote(url)}",
+                headers=anti_ban.get_generic_headers(),
+                timeout=8
+            )
             if resp.status_code == 200:
-                d = resp.json().get("data", {})
-                video_url = d.get("play") or d.get("wmplay")
-                audio_url = d.get("music")
-                cover = d.get("cover") or d.get("origin_cover")
-                title = d.get("title") or "TikTok Video Without Watermark"
-                author = d.get("author", {}).get("unique_id") or "tiktok_creator"
+                d = resp.json().get('data', {})
+                video_url = d.get('play') or d.get('wmplay')
+                audio_url = d.get('music')
+                cover = d.get('cover') or d.get('origin_cover')
+                title = d.get('title') or 'TikTok Video Without Watermark'
+                author = d.get('author', {}).get('unique_id') or 'tiktok_creator'
                 streams = []
                 if video_url:
-                    clean_v = video_url.replace("&amp;", "&")
+                    clean_v = video_url.replace('&amp;', '&')
                     streams.append({
-                        "type": "video",
-                        "quality": "HD 1080p (No Watermark) ✓",
-                        "format": "mp4",
-                        "url": clean_v,
-                        "download_url": f"/api/stream?url={urllib.parse.quote(clean_v)}&filename=veloclip_tiktok_video.mp4",
-                        "label": "Download HD Video (No Watermark)"
+                        'type': 'video',
+                        'quality': 'HD 1080p (No Watermark) ✓',
+                        'format': 'mp4',
+                        'url': clean_v,
+                        'download_url': f"/api/stream?url={urllib.parse.quote(clean_v)}&filename=veloclip_tiktok_video.mp4",
+                        'label': 'Download HD Video (No Watermark)'
                     })
                 if audio_url:
-                    clean_a = audio_url.replace("&amp;", "&")
+                    clean_a = audio_url.replace('&amp;', '&')
                     streams.append({
-                        "type": "audio",
-                        "quality": "320 kbps Original Audio",
-                        "format": "mp3",
-                        "url": clean_a,
-                        "download_url": f"/api/stream?url={urllib.parse.quote(clean_a)}&filename=veloclip_tiktok_audio.mp3",
-                        "label": "Extract Original Sound (MP3)"
+                        'type': 'audio',
+                        'quality': '320 kbps Original Audio',
+                        'format': 'mp3',
+                        'url': clean_a,
+                        'download_url': f"/api/stream?url={urllib.parse.quote(clean_a)}&filename=veloclip_tiktok_audio.mp3",
+                        'label': 'Extract Original Sound (MP3)'
                     })
                 if streams:
                     return {
-                        "success": True,
-                        "platform": "tiktok",
-                        "title": title,
-                        "caption": title,
-                        "author": author,
-                        "thumbnail": cover,
-                        "duration": d.get("duration", 15),
-                        "streams": streams,
-                        "original_url": url
+                        'success': True,
+                        'platform': 'tiktok',
+                        'title': title,
+                        'caption': title,
+                        'author': author,
+                        'thumbnail': cover,
+                        'duration': d.get('duration', 15),
+                        'streams': streams,
+                        'original_url': url
                     }
         except Exception:
             pass
-        return self.extract_generic(url)
+
+        # Tier 2: SSSTik scraper (alternative public API)
+        try:
+            session = requests.Session()
+            # Get token from SSSTik
+            home_resp = session.get('https://ssstik.io/en', headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            }, timeout=6)
+            token_match = re.search(r'tt:"([^"]+)"', home_resp.text)
+            if token_match:
+                token = token_match.group(1)
+                api_resp = session.post('https://ssstik.io/abc?url=dl', data={
+                    'id': url,
+                    'locale': 'en',
+                    'tt': token
+                }, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'https://ssstik.io/en',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                }, timeout=10)
+                html = api_resp.text
+                # Extract no-watermark download link
+                nwm_match = re.search(r'href="(https://tikcdn[^"]+)"[^>]*>\s*Without watermark', html, re.IGNORECASE)
+                if not nwm_match:
+                    nwm_match = re.search(r'href="(https://[^"]+tikcdn[^"]+)"', html)
+                if nwm_match:
+                    video_url = nwm_match.group(1)
+                    title_match = re.search(r'<p[^>]*class="[^"]*maintext[^"]*"[^>]*>([^<]+)</p>', html)
+                    title = title_match.group(1).strip() if title_match else 'TikTok Video'
+                    thumb_match = re.search(r'<img[^>]*src="(https://p[0-9]+[^"]+)"', html)
+                    thumb = thumb_match.group(1) if thumb_match else ''
+                    streams = [{
+                        'type': 'video',
+                        'quality': 'HD (No Watermark) ✓',
+                        'format': 'mp4',
+                        'url': video_url,
+                        'download_url': f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_tiktok_video.mp4",
+                        'label': 'Download HD Video (No Watermark)'
+                    }]
+                    return {
+                        'success': True,
+                        'platform': 'tiktok',
+                        'title': title,
+                        'caption': title,
+                        'author': 'TikTok Creator',
+                        'thumbnail': thumb,
+                        'duration': 15,
+                        'streams': streams,
+                        'original_url': url
+                    }
+        except Exception:
+            pass
+
+        # Tier 3: yt-dlp generic extractor (slow but reliable for most TikTok content)
+        try:
+            ydl_opts = dict(self.ydl_opts_base)
+            ydl_opts['http_headers'] = anti_ban.get_generic_headers()
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return self._format_ytdlp_info(info, platform='tiktok', original_url=url)
+        except Exception as e:
+            return {
+                'success': False,
+                'platform': 'tiktok',
+                'error': 'TikTok video could not be extracted. The video may be private or the link may be invalid.',
+                'details': str(e)
+            }
 
     def extract_twitter(self, url: str) -> Dict[str, Any]:
         # Tier 1: FxTwitter High-Speed Cloud Engine
@@ -540,48 +627,67 @@ class MediaExtractor:
     def extract_snapchat(self, url: str) -> Dict[str, Any]:
         # Tier 1: Direct HTML OpenGraph and Video Tags
         try:
-            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=6)
+            resp = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                'Accept': 'text/html,application/xhtml+xml',
+            }, timeout=8, allow_redirects=True)
             html = resp.text
             v_match = re.search(r'<meta property="og:video(?::secure_url)?" content="([^"]+)"', html) or \
-                      re.search(r'"contentUrl":"([^"]+)"', html)
+                      re.search(r'"contentUrl":"([^"]+)"', html) or \
+                      re.search(r'<source[^>]+src="(https://[^"]*\.mp4[^"]*)"', html)
             img_match = re.search(r'<meta property="og:image(?::secure_url)?" content="([^"]+)"', html)
             t_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+            a_match = re.search(r'<meta property="og:site_name" content="([^"]+)"', html)
 
             if v_match:
-                video_url = v_match.group(1).replace("&amp;", "&").replace("\\u002F", "/")
-                thumb = img_match.group(1).replace("&amp;", "&") if img_match else ""
-                title = t_match.group(1) if t_match else "Snapchat Spotlight Video"
+                video_url = v_match.group(1).replace('&amp;', '&').replace('\\u002F', '/')
+                thumb = img_match.group(1).replace('&amp;', '&') if img_match else ''
+                title = t_match.group(1) if t_match else 'Snapchat Spotlight Video'
                 return {
-                    "success": True,
-                    "platform": "snapchat",
-                    "title": title,
-                    "caption": title,
-                    "author": "Snapchat Creator",
-                    "thumbnail": thumb,
-                    "duration": 20,
-                    "streams": [
+                    'success': True,
+                    'platform': 'snapchat',
+                    'title': title,
+                    'caption': title,
+                    'author': a_match.group(1) if a_match else 'Snapchat Creator',
+                    'thumbnail': thumb,
+                    'duration': 20,
+                    'streams': [
                         {
-                            "type": "video",
-                            "quality": "1080p Full HD (No Watermark) ✓",
-                            "format": "mp4",
-                            "url": video_url,
-                            "download_url": f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_snapchat.mp4",
-                            "label": "Download Spotlight Video"
+                            'type': 'video',
+                            'quality': '1080p Full HD (No Watermark) ✓',
+                            'format': 'mp4',
+                            'url': video_url,
+                            'download_url': f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_snapchat.mp4",
+                            'label': 'Download Spotlight Video'
                         },
                         {
-                            "type": "audio",
-                            "quality": "320 kbps Audio",
-                            "format": "mp3",
-                            "url": video_url,
-                            "download_url": f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_snapchat.mp3&convert_mp3=1",
-                            "label": "Extract Audio (MP3)"
+                            'type': 'audio',
+                            'quality': '320 kbps Audio',
+                            'format': 'mp3',
+                            'url': video_url,
+                            'download_url': f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_snapchat.mp3&convert_mp3=1",
+                            'label': 'Extract Audio (MP3)'
                         }
                     ],
-                    "original_url": url
+                    'original_url': url
                 }
         except Exception:
             pass
-        return self.extract_generic(url)
+
+        # Tier 2: yt-dlp Snapchat extractor
+        try:
+            ydl_opts = dict(self.ydl_opts_base)
+            ydl_opts['http_headers'] = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return self._format_ytdlp_info(info, platform='snapchat', original_url=url)
+        except Exception as e:
+            return {
+                'success': False,
+                'platform': 'snapchat',
+                'error': 'Snapchat Spotlight/Story could not be extracted. Public Spotlight links are supported; Stories and DMs require authentication.',
+                'details': str(e)
+            }
 
     def extract_facebook(self, url: str) -> Dict[str, Any]:
         try:
@@ -729,20 +835,132 @@ class MediaExtractor:
         try:
             if "redd.it/" in url:
                 try:
-                    head = requests.get(url, allow_redirects=True, timeout=5)
+                    head = requests.get(url, allow_redirects=True, timeout=5,
+                                       headers={"User-Agent": "VeloClip/3.0 (media downloader)"})
                     canonical_url = head.url
                 except Exception:
                     pass
 
-            title = "Reddit Post"
-            author = "Reddit Creator"
+            # Tier 1: Official Reddit JSON API (free, no auth needed for public posts)
+            # Append .json to any reddit.com URL to get structured data
+            json_url = re.sub(r'\?.*$', '', canonical_url.rstrip('/')) + '.json'
+            try:
+                resp = requests.get(
+                    json_url,
+                    headers={"User-Agent": "VeloClip/3.0 (media downloader)"},
+                    timeout=8
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Reddit JSON returns a list: [post_listing, comments_listing]
+                    if isinstance(data, list) and data:
+                        post_data = data[0].get('data', {}).get('children', [{}])[0].get('data', {})
+                    elif isinstance(data, dict):
+                        post_data = data.get('data', {}).get('children', [{}])[0].get('data', {})
+                    else:
+                        post_data = {}
+
+                    title = post_data.get('title', 'Reddit Post')
+                    author = f"u/{post_data.get('author', 'reddit_user')}"
+                    thumbnail = post_data.get('thumbnail', '')
+                    if thumbnail in ('self', 'default', 'nsfw', 'spoiler', ''):
+                        thumbnail = ''
+
+                    streams = []
+                    video_url = None
+                    image_url = None
+
+                    # Check for Reddit-hosted video (v.redd.it)
+                    secure_media = post_data.get('secure_media') or post_data.get('media') or {}
+                    reddit_video = secure_media.get('reddit_video', {})
+                    if reddit_video.get('fallback_url'):
+                        video_url = reddit_video['fallback_url'].split('?')[0]  # Remove quality params
+
+                    # Check for preview video
+                    if not video_url:
+                        preview = post_data.get('preview', {})
+                        reddit_video_preview = preview.get('reddit_video_preview', {})
+                        if reddit_video_preview.get('fallback_url'):
+                            video_url = reddit_video_preview['fallback_url'].split('?')[0]
+
+                    # Check for direct image
+                    if post_data.get('post_hint') == 'image' and post_data.get('url'):
+                        image_url = post_data['url']
+
+                    # Check preview images for image posts
+                    if not image_url:
+                        preview_images = post_data.get('preview', {}).get('images', [])
+                        if preview_images:
+                            src = preview_images[0].get('source', {})
+                            if src.get('url'):
+                                image_url = src['url'].replace('&amp;', '&')
+
+                    # Check for gallery
+                    if not image_url and not video_url and post_data.get('is_gallery'):
+                        gallery_data = post_data.get('gallery_data', {}).get('items', [])
+                        media_metadata = post_data.get('media_metadata', {})
+                        for item in gallery_data[:1]:  # First image from gallery
+                            media_id = item.get('media_id', '')
+                            if media_id and media_metadata.get(media_id):
+                                meta = media_metadata[media_id]
+                                if meta.get('s', {}).get('u'):
+                                    image_url = meta['s']['u'].replace('&amp;', '&')
+
+                    if video_url:
+                        clean_vid = video_url.replace('&amp;', '&')
+                        streams.append({
+                            'type': 'video',
+                            'quality': f"{reddit_video.get('height', 720)}p HD (Original)",
+                            'format': 'mp4',
+                            'url': clean_vid,
+                            'download_url': f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_video.mp4",
+                            'label': 'Download HD Video (MP4)'
+                        })
+                        streams.append({
+                            'type': 'audio',
+                            'quality': '320 kbps Audio',
+                            'format': 'mp3',
+                            'url': clean_vid,
+                            'download_url': f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_audio.mp3&convert_mp3=1",
+                            'label': 'Extract Audio (MP3)'
+                        })
+
+                    if image_url:
+                        clean_img = image_url.replace('&amp;', '&')
+                        streams.append({
+                            'type': 'image',
+                            'quality': 'Full Resolution Image',
+                            'format': 'jpg',
+                            'url': clean_img,
+                            'download_url': f"/api/stream?url={urllib.parse.quote(clean_img)}&filename=veloclip_reddit_image.jpg",
+                            'label': 'Download Full-Res Post Image'
+                        })
+
+                    if streams:
+                        return {
+                            'success': True,
+                            'platform': 'reddit',
+                            'title': title,
+                            'caption': title,
+                            'author': author,
+                            'thumbnail': image_url or (streams[0]['url'] if streams else ''),
+                            'duration': reddit_video.get('duration', 0) if video_url else 0,
+                            'streams': streams,
+                            'original_url': url
+                        }
+            except Exception:
+                pass
+
+            # Tier 2: Fallback to HTML scraping with facebookexternalhit UA
+            title = 'Reddit Post'
+            author = 'Reddit Creator'
             try:
                 oe = requests.get(
                     f"https://www.reddit.com/oembed?url={urllib.parse.quote(canonical_url)}",
                     headers={"User-Agent": "Mozilla/5.0"},
                     timeout=5
                 ).json()
-                title = oe.get("title", title)
+                title = oe.get('title', title)
                 author = f"u/{oe.get('author_name', author)}"
             except Exception:
                 pass
@@ -757,7 +975,6 @@ class MediaExtractor:
                 if v_match:
                     video_url = v_match.group(1) if v_match.groups() else v_match.group(0)
 
-                # Strictly filter out reddit static logos/favicons
                 def is_logo(u: str) -> bool:
                     l = u.lower()
                     return "redditstatic" in l or "favicon" in l or "avatar" in l or "logo" in l or "/t5_" in l
@@ -771,56 +988,56 @@ class MediaExtractor:
                     if m:
                         u = m.group(1) if m.groups() else m.group(0)
                         if not is_logo(u):
-                            image_url = u.replace("&amp;", "&")
+                            image_url = u.replace('&amp;', '&')
                             break
             except Exception:
                 pass
 
             streams = []
             if video_url:
-                clean_vid = video_url.replace("&amp;", "&")
+                clean_vid = video_url.replace('&amp;', '&')
                 streams.append({
-                    "type": "video",
-                    "quality": "HD Video (Original Quality) ✓",
-                    "format": "mp4",
-                    "url": clean_vid,
-                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_video.mp4",
-                    "label": "Download HD Video (MP4)"
+                    'type': 'video',
+                    'quality': 'HD Video (Original Quality) ✓',
+                    'format': 'mp4',
+                    'url': clean_vid,
+                    'download_url': f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_video.mp4",
+                    'label': 'Download HD Video (MP4)'
                 })
                 streams.append({
-                    "type": "audio",
-                    "quality": "320 kbps Audio",
-                    "format": "mp3",
-                    "url": clean_vid,
-                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_audio.mp3&convert_mp3=1",
-                    "label": "Extract Audio (MP3)"
+                    'type': 'audio',
+                    'quality': '320 kbps Audio',
+                    'format': 'mp3',
+                    'url': clean_vid,
+                    'download_url': f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_audio.mp3&convert_mp3=1",
+                    'label': 'Extract Audio (MP3)'
                 })
             if image_url:
                 streams.append({
-                    "type": "image",
-                    "quality": "Full Resolution Image",
-                    "format": "jpg",
-                    "url": image_url,
-                    "download_url": f"/api/stream?url={urllib.parse.quote(image_url)}&filename=veloclip_reddit_image.jpg",
-                    "label": "Download Full-Res Post Image"
+                    'type': 'image',
+                    'quality': 'Full Resolution Image',
+                    'format': 'jpg',
+                    'url': image_url,
+                    'download_url': f"/api/stream?url={urllib.parse.quote(image_url)}&filename=veloclip_reddit_image.jpg",
+                    'label': 'Download Full-Res Post Image'
                 })
 
             if streams:
                 return {
-                    "success": True,
-                    "platform": "reddit",
-                    "title": title,
-                    "caption": title,
-                    "author": author,
-                    "thumbnail": image_url or streams[0]["url"],
-                    "duration": 20 if video_url else 0,
-                    "streams": streams,
-                    "original_url": url
+                    'success': True,
+                    'platform': 'reddit',
+                    'title': title,
+                    'caption': title,
+                    'author': author,
+                    'thumbnail': image_url or streams[0]['url'],
+                    'duration': 20 if video_url else 0,
+                    'streams': streams,
+                    'original_url': url
                 }
         except Exception as e:
-            return {"success": False, "platform": "reddit", "error": f"Reddit extraction error: {e}"}
+            return {'success': False, 'platform': 'reddit', 'error': f'Reddit extraction error: {e}'}
 
-        return {"success": False, "platform": "reddit", "error": "Could not extract media from Reddit post."}
+        return {'success': False, 'platform': 'reddit', 'error': 'Could not extract media from this Reddit post. Ensure the post is public and contains video or images.'}
 
     def extract_generic(self, url: str) -> Dict[str, Any]:
         try:
