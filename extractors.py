@@ -61,6 +61,10 @@ class MediaExtractor:
             return self.extract_facebook(url)
         elif platform == "whatsapp":
             return self.extract_whatsapp(url)
+        elif platform == "pinterest":
+            return self.extract_pinterest(url)
+        elif platform == "reddit":
+            return self.extract_reddit(url)
         else:
             # Fallback to general yt-dlp extractor for any other supported site
             return self.extract_generic(url)
@@ -377,6 +381,210 @@ class MediaExtractor:
                 "web_url": f"https://web.whatsapp.com/send?phone={phone}&text={urllib.parse.quote(text)}" if phone else ""
             }
         }
+
+    def extract_pinterest(self, url: str) -> Dict[str, Any]:
+        canonical_url = url
+        try:
+            if "pin.it" in url:
+                try:
+                    head = requests.get(url, allow_redirects=True, timeout=5)
+                    canonical_url = head.url
+                except Exception:
+                    pass
+
+            pin_match = re.search(r'/pin/(\d+)', canonical_url)
+            pin_id = pin_match.group(1) if pin_match else None
+
+            title = "Pinterest Pin"
+            author = "Pinterest Creator"
+            video_url = None
+            image_url = None
+
+            if pin_id:
+                try:
+                    pidgets = requests.get(
+                        f"https://widgets.pinterest.com/v3/pidgets/pins/info/?pin_ids={pin_id}",
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=5
+                    ).json()
+                    p = pidgets.get("data", [{}])[0]
+                    if p and not p.get("error"):
+                        title = p.get("description") or title
+                        author = p.get("pinner", {}).get("full_name") or author
+                        if p.get("videos", {}).get("video_list"):
+                            vlist = p["videos"]["video_list"]
+                            best_k = next(
+                                (k for k in vlist if "720" in k or "EXP" in k or vlist[k].get("url", "").endswith(".mp4")),
+                                list(vlist.keys())[0]
+                            )
+                            video_url = vlist[best_k].get("url")
+                        if p.get("images"):
+                            best_img = p["images"].get("564x", {}).get("url") or p["images"].get("236x", {}).get("url")
+                            if best_img:
+                                image_url = re.sub(r'/\d+x/', '/originals/', best_img)
+                except Exception:
+                    pass
+
+            if not video_url and not image_url:
+                try:
+                    resp = requests.get(canonical_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+                    html = resp.text
+                    v_match = re.search(r'https://v\.pinimg\.com/[^\s"\'<>\)]+\.mp4', html) or re.search(r'<meta property="og:video(?::secure_url)?" content="([^"]+)"', html)
+                    img_match = re.search(r'https://i\.pinimg\.com/originals/[^\s"\'<>\)]+', html) or re.search(r'<meta property="og:image(?::secure_url)?" content="([^"]+)"', html)
+                    t_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                    if v_match:
+                        video_url = v_match.group(1) if v_match.groups() else v_match.group(0)
+                    if img_match:
+                        image_url = img_match.group(1) if img_match.groups() else img_match.group(0)
+                    if t_match:
+                        title = t_match.group(1)
+                except Exception:
+                    pass
+
+            streams = []
+            if video_url:
+                clean_vid = video_url.replace("&amp;", "&")
+                streams.append({
+                    "type": "video",
+                    "quality": "HD 1080p / 720p Video ✓",
+                    "format": "mp4",
+                    "url": clean_vid,
+                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_pinterest_{pin_id or 'video'}.mp4",
+                    "label": "Download HD Video (MP4)"
+                })
+                streams.append({
+                    "type": "audio",
+                    "quality": "320 kbps Audio",
+                    "format": "mp3",
+                    "url": clean_vid,
+                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_pinterest_{pin_id or 'audio'}.mp3&convert_mp3=1",
+                    "label": "Extract Audio (MP3)"
+                })
+            if image_url:
+                clean_img = image_url.replace("&amp;", "&")
+                streams.append({
+                    "type": "image",
+                    "quality": "100% Original Master Resolution",
+                    "format": "jpg",
+                    "url": clean_img,
+                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_img)}&filename=veloclip_pinterest_{pin_id or 'photo'}.jpg",
+                    "label": "Download Full-Res Master Image (Original)"
+                })
+
+            if streams:
+                return {
+                    "success": True,
+                    "platform": "pinterest",
+                    "title": title,
+                    "caption": title,
+                    "author": author,
+                    "thumbnail": image_url or streams[0]["url"],
+                    "duration": 20 if video_url else 0,
+                    "streams": streams,
+                    "original_url": url
+                }
+        except Exception as e:
+            return {"success": False, "platform": "pinterest", "error": f"Pinterest extraction error: {e}"}
+
+        return {"success": False, "platform": "pinterest", "error": "Could not extract media from Pinterest pin."}
+
+    def extract_reddit(self, url: str) -> Dict[str, Any]:
+        canonical_url = url
+        try:
+            if "redd.it/" in url:
+                try:
+                    head = requests.get(url, allow_redirects=True, timeout=5)
+                    canonical_url = head.url
+                except Exception:
+                    pass
+
+            title = "Reddit Post"
+            author = "Reddit Creator"
+            try:
+                oe = requests.get(
+                    f"https://www.reddit.com/oembed?url={urllib.parse.quote(canonical_url)}",
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=5
+                ).json()
+                title = oe.get("title", title)
+                author = f"u/{oe.get('author_name', author)}"
+            except Exception:
+                pass
+
+            video_url = None
+            image_url = None
+            try:
+                resp = requests.get(canonical_url, headers={"User-Agent": "facebookexternalhit/1.1"}, timeout=6)
+                html = resp.text
+
+                v_match = re.search(r'https?://(?:v\.redd\.it|packaged-media\.redd\.it)/[^\s"\'<>\)]+\.mp4', html) or re.search(r'<meta property="og:video(?::secure_url)?" content="([^"]+)"', html)
+                if v_match:
+                    video_url = v_match.group(1) if v_match.groups() else v_match.group(0)
+
+                # Strictly filter out reddit static logos/favicons
+                def is_logo(u: str) -> bool:
+                    l = u.lower()
+                    return "redditstatic" in l or "favicon" in l or "avatar" in l or "logo" in l or "/t5_" in l
+
+                for pattern in [
+                    r'https://i\.redd\.it/[^\s"\'<>\)]+\.(?:jpg|png|webp)',
+                    r'https://preview\.redd\.it/[^\s"\'<>\)]+\.(?:jpg|png|webp)',
+                    r'<meta property="og:image(?::secure_url)?" content="([^"]+)"'
+                ]:
+                    m = re.search(pattern, html)
+                    if m:
+                        u = m.group(1) if m.groups() else m.group(0)
+                        if not is_logo(u):
+                            image_url = u.replace("&amp;", "&")
+                            break
+            except Exception:
+                pass
+
+            streams = []
+            if video_url:
+                clean_vid = video_url.replace("&amp;", "&")
+                streams.append({
+                    "type": "video",
+                    "quality": "HD Video (Original Quality) ✓",
+                    "format": "mp4",
+                    "url": clean_vid,
+                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_video.mp4",
+                    "label": "Download HD Video (MP4)"
+                })
+                streams.append({
+                    "type": "audio",
+                    "quality": "320 kbps Audio",
+                    "format": "mp3",
+                    "url": clean_vid,
+                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_vid)}&filename=veloclip_reddit_audio.mp3&convert_mp3=1",
+                    "label": "Extract Audio (MP3)"
+                })
+            if image_url:
+                streams.append({
+                    "type": "image",
+                    "quality": "Full Resolution Image",
+                    "format": "jpg",
+                    "url": image_url,
+                    "download_url": f"/api/stream?url={urllib.parse.quote(image_url)}&filename=veloclip_reddit_image.jpg",
+                    "label": "Download Full-Res Post Image"
+                })
+
+            if streams:
+                return {
+                    "success": True,
+                    "platform": "reddit",
+                    "title": title,
+                    "caption": title,
+                    "author": author,
+                    "thumbnail": image_url or streams[0]["url"],
+                    "duration": 20 if video_url else 0,
+                    "streams": streams,
+                    "original_url": url
+                }
+        except Exception as e:
+            return {"success": False, "platform": "reddit", "error": f"Reddit extraction error: {e}"}
+
+        return {"success": False, "platform": "reddit", "error": "Could not extract media from Reddit post."}
 
     def extract_generic(self, url: str) -> Dict[str, Any]:
         try:

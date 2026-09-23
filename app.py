@@ -71,8 +71,8 @@ def health_check():
     return jsonify({
         "status": "online",
         "service": "VeloClip Core Engine (2026 Edition)",
-        "version": "2.6.0",
-        "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok"],
+        "version": "2.7.0",
+        "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok", "pinterest", "reddit"],
         "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp"]
     })
 
@@ -93,7 +93,7 @@ def cookies_status():
             "has_env": ig_has_env,
             "ready": ig_has_file or ig_has_env
         },
-        "server_version": "2.6.0"
+        "server_version": "2.7.0"
     })
 
 @app.route('/api/extract', methods=['POST'])
