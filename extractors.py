@@ -236,29 +236,43 @@ class MediaExtractor:
         }
 
     def extract_youtube(self, url: str) -> Dict[str, Any]:
+        cookie_file = os.environ.get("YOUTUBE_COOKIES_FILE") or "cookies.txt"
+        has_cookies = os.path.exists(cookie_file) or bool(os.environ.get("YOUTUBE_COOKIES"))
+        
+        # Tier 1: yt-dlp with authenticated session cookies (if available)
+        if has_cookies:
+            try:
+                ydl_opts = dict(self.ydl_opts_base)
+                ydl_opts['http_headers'] = anti_ban.get_generic_headers(referer="https://www.youtube.com/")
+                if os.path.exists(cookie_file):
+                    ydl_opts['cookiefile'] = cookie_file
+                elif os.environ.get("YOUTUBE_COOKIES"):
+                    temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_yt_cookies.txt")
+                    if not os.path.exists(temp_cookie_path):
+                        with open(temp_cookie_path, "w", encoding="utf-8") as f:
+                            f.write(os.environ["YOUTUBE_COOKIES"])
+                    ydl_opts['cookiefile'] = temp_cookie_path
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    return self._format_ytdlp_info(info, platform="youtube", original_url=url)
+            except Exception:
+                # Expired or flagged cookies shouldn't block extraction; proceed to clean client
+                pass
+
+        # Tier 2: Resilient clean yt-dlp client without cookies (uses Android/iOS/VisionOS player APIs)
         try:
-            ydl_opts = dict(self.ydl_opts_base)
-            ydl_opts['http_headers'] = anti_ban.get_generic_headers(referer="https://www.youtube.com/")
-            
-            cookie_file = os.environ.get("YOUTUBE_COOKIES_FILE") or "cookies.txt"
-            if os.path.exists(cookie_file):
-                ydl_opts['cookiefile'] = cookie_file
-            elif os.environ.get("YOUTUBE_COOKIES"):
-                temp_cookie_path = os.path.join(tempfile.gettempdir(), "veloclip_yt_cookies.txt")
-                if not os.path.exists(temp_cookie_path):
-                    with open(temp_cookie_path, "w", encoding="utf-8") as f:
-                        f.write(os.environ["YOUTUBE_COOKIES"])
-                ydl_opts['cookiefile'] = temp_cookie_path
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl_opts_clean = dict(self.ydl_opts_base)
+            ydl_opts_clean['http_headers'] = anti_ban.get_generic_headers(referer="https://www.youtube.com/")
+            with yt_dlp.YoutubeDL(ydl_opts_clean) as ydl:
                 info = ydl.extract_info(url, download=False)
                 return self._format_ytdlp_info(info, platform="youtube", original_url=url)
-        except Exception as e:
-            # First try Piped API mirrors which don't require bot deciphering
+        except Exception as e_clean:
+            # Tier 3: First try Piped API mirrors
             piped_fallback = self._extract_youtube_piped(url)
             if piped_fallback:
                 return piped_fallback
-            # Then fallback to Invidious instance
+            # Tier 4: Fallback to Invidious instance
             fallback = self._extract_youtube_invidious(url)
             if fallback:
                 return fallback
@@ -266,7 +280,7 @@ class MediaExtractor:
                 "success": False,
                 "platform": "youtube",
                 "error": "Failed to parse YouTube media. Please check URL.",
-                "details": str(e)
+                "details": str(e_clean)
             }
 
     def _extract_youtube_piped(self, url: str) -> Optional[Dict[str, Any]]:

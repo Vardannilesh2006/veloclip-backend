@@ -244,8 +244,17 @@ def verified_download():
                 "noplaylist": True,
                 "max_filesize": 250 * 1024 * 1024,
             }
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([source_url])
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.download([source_url])
+        except Exception:
+            if "cookiefile" in options:
+                clean_options = dict(options)
+                clean_options.pop("cookiefile", None)
+                with yt_dlp.YoutubeDL(clean_options) as ydl:
+                    ydl.download([source_url])
+            else:
+                raise
         preferred_extension = ".mp3" if audio_only else ".mp4"
         candidates = sorted(workdir.glob("media.*"), key=lambda path: path.stat().st_size, reverse=True)
         if not candidates:
