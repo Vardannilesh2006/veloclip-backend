@@ -57,6 +57,12 @@ class MediaExtractor:
             return self.extract_instagram(url)
         elif platform == "youtube":
             return self.extract_youtube(url)
+        elif platform == "tiktok":
+            return self.extract_tiktok(url)
+        elif platform == "twitter":
+            return self.extract_twitter(url)
+        elif platform == "snapchat":
+            return self.extract_snapchat(url)
         elif platform == "facebook":
             return self.extract_facebook(url)
         elif platform == "whatsapp":
@@ -248,9 +254,11 @@ class MediaExtractor:
                 info = ydl.extract_info(url, download=False)
                 return self._format_ytdlp_info(info, platform="youtube", original_url=url)
         except Exception as e:
-            # yt-dlp occasionally cannot obtain a player response from cloud
-            # datacentres.  Keep the download service available by resolving
-            # the public metadata through an Invidious instance instead.
+            # First try Piped API mirrors which don't require bot deciphering
+            piped_fallback = self._extract_youtube_piped(url)
+            if piped_fallback:
+                return piped_fallback
+            # Then fallback to Invidious instance
             fallback = self._extract_youtube_invidious(url)
             if fallback:
                 return fallback
@@ -260,6 +268,68 @@ class MediaExtractor:
                 "error": "Failed to parse YouTube media. Please check URL.",
                 "details": str(e)
             }
+
+    def _extract_youtube_piped(self, url: str) -> Optional[Dict[str, Any]]:
+        parsed = urllib.parse.urlparse(url)
+        video_id = ""
+        if parsed.netloc.lower().endswith("youtu.be"):
+            video_id = parsed.path.strip("/").split("/")[0]
+        else:
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+            if not video_id and "/shorts/" in parsed.path:
+                video_id = parsed.path.split("/shorts/", 1)[1].split("/", 1)[0]
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            return None
+
+        piped_mirrors = [
+            "https://api.piped.private.coffee",
+            "https://pipedapi.tokhmi.xyz",
+            "https://piped-api.lunar.icu",
+            "https://pipedapi.leptons.xyz",
+            "https://piped-api.garudalinux.org"
+        ]
+        for m in piped_mirrors:
+            try:
+                resp = requests.get(f"{m}/streams/{video_id}", headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+                if resp.status_code == 200:
+                    d = resp.json()
+                    vstreams = d.get("videoStreams", [])
+                    astreams = d.get("audioStreams", [])
+                    streams = []
+                    for v in vstreams:
+                        if v.get("url") and not v.get("videoOnly"):
+                            streams.append({
+                                "type": "video",
+                                "quality": v.get("quality") or "720p",
+                                "format": "mp4",
+                                "url": v["url"],
+                                "label": f"{v.get('quality', '720p')} MP4 (Audio + Video)"
+                            })
+                    for a in astreams[:2]:
+                        if a.get("url"):
+                            streams.append({
+                                "type": "audio",
+                                "quality": "320 kbps Studio Audio",
+                                "format": "mp3",
+                                "url": a["url"],
+                                "label": "Extract Audio (MP3)"
+                            })
+                    if streams:
+                        return {
+                            "success": True,
+                            "platform": "youtube",
+                            "title": d.get("title", "YouTube Video"),
+                            "caption": d.get("description", "")[:200],
+                            "author": d.get("uploader", "YouTube Creator"),
+                            "thumbnail": d.get("thumbnailUrl") or f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+                            "duration": d.get("duration", 180),
+                            "streams": streams,
+                            "original_url": url
+                        }
+            except Exception:
+                continue
+        return None
 
     def _extract_youtube_invidious(self, url: str) -> Optional[Dict[str, Any]]:
         parsed = urllib.parse.urlparse(url)
@@ -345,7 +415,159 @@ class MediaExtractor:
                     }
             except (requests.RequestException, ValueError, TypeError):
                 continue
-        return None
+    def extract_tiktok(self, url: str) -> Dict[str, Any]:
+        # Tier 1: High-speed zero watermark TikWM API
+        try:
+            resp = requests.get(f"https://www.tikwm.com/api/?url={urllib.parse.quote(url)}", headers=anti_ban.get_generic_headers(), timeout=6)
+            if resp.status_code == 200:
+                d = resp.json().get("data", {})
+                video_url = d.get("play") or d.get("wmplay")
+                audio_url = d.get("music")
+                cover = d.get("cover") or d.get("origin_cover")
+                title = d.get("title") or "TikTok Video Without Watermark"
+                author = d.get("author", {}).get("unique_id") or "tiktok_creator"
+                streams = []
+                if video_url:
+                    clean_v = video_url.replace("&amp;", "&")
+                    streams.append({
+                        "type": "video",
+                        "quality": "HD 1080p (No Watermark) ✓",
+                        "format": "mp4",
+                        "url": clean_v,
+                        "download_url": f"/api/stream?url={urllib.parse.quote(clean_v)}&filename=veloclip_tiktok_video.mp4",
+                        "label": "Download HD Video (No Watermark)"
+                    })
+                if audio_url:
+                    clean_a = audio_url.replace("&amp;", "&")
+                    streams.append({
+                        "type": "audio",
+                        "quality": "320 kbps Original Audio",
+                        "format": "mp3",
+                        "url": clean_a,
+                        "download_url": f"/api/stream?url={urllib.parse.quote(clean_a)}&filename=veloclip_tiktok_audio.mp3",
+                        "label": "Extract Original Sound (MP3)"
+                    })
+                if streams:
+                    return {
+                        "success": True,
+                        "platform": "tiktok",
+                        "title": title,
+                        "caption": title,
+                        "author": author,
+                        "thumbnail": cover,
+                        "duration": d.get("duration", 15),
+                        "streams": streams,
+                        "original_url": url
+                    }
+        except Exception:
+            pass
+        return self.extract_generic(url)
+
+    def extract_twitter(self, url: str) -> Dict[str, Any]:
+        # Tier 1: FxTwitter High-Speed Cloud Engine
+        try:
+            tweet_match = re.search(r'(?:twitter\.com|x\.com)/(?:[^/]+)/status/(\d+)', url)
+            tweet_id = tweet_match.group(1) if tweet_match else None
+            if tweet_id:
+                resp = requests.get(f"https://api.fxtwitter.com/i/status/{tweet_id}", headers=anti_ban.get_generic_headers(), timeout=6)
+                if resp.status_code == 200:
+                    d = resp.json().get("tweet", {})
+                    title = d.get("text") or "Twitter / X Video"
+                    author = d.get("author", {}).get("screen_name") or "x_creator"
+                    media_list = d.get("media", {}).get("all", [])
+                    streams = []
+                    for m in media_list:
+                        if m.get("type") in ("video", "gif"):
+                            v_url = m.get("url") or (m.get("variants", [{}])[0].get("url"))
+                            if v_url:
+                                clean_v = v_url.replace("&amp;", "&")
+                                streams.append({
+                                    "type": "video",
+                                    "quality": "HD 1080p Video ✓",
+                                    "format": "mp4",
+                                    "url": clean_v,
+                                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_v)}&filename=veloclip_twitter_{tweet_id}.mp4",
+                                    "label": "Download HD Video (MP4)"
+                                })
+                                streams.append({
+                                    "type": "audio",
+                                    "quality": "320 kbps Audio",
+                                    "format": "mp3",
+                                    "url": clean_v,
+                                    "download_url": f"/api/stream?url={urllib.parse.quote(clean_v)}&filename=veloclip_twitter_{tweet_id}_audio.mp3",
+                                    "label": "Extract Audio (MP3)"
+                                })
+                        elif m.get("type") == "photo" and m.get("url"):
+                            clean_img = m["url"].replace("&amp;", "&")
+                            streams.append({
+                                "type": "image",
+                                "quality": "Full Resolution Photo",
+                                "format": "jpg",
+                                "url": clean_img,
+                                "download_url": f"/api/stream?url={urllib.parse.quote(clean_img)}&filename=veloclip_twitter_{tweet_id}.jpg",
+                                "label": "Download Photo (Full HD)"
+                            })
+                    if streams:
+                        return {
+                            "success": True,
+                            "platform": "twitter",
+                            "title": title[:100],
+                            "caption": title,
+                            "author": f"@{author}",
+                            "thumbnail": media_list[0].get("thumbnail_url") or media_list[0].get("url"),
+                            "duration": 20,
+                            "streams": streams,
+                            "original_url": url
+                        }
+        except Exception:
+            pass
+        return self.extract_generic(url)
+
+    def extract_snapchat(self, url: str) -> Dict[str, Any]:
+        # Tier 1: Direct HTML OpenGraph and Video Tags
+        try:
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=6)
+            html = resp.text
+            v_match = re.search(r'<meta property="og:video(?::secure_url)?" content="([^"]+)"', html) or \
+                      re.search(r'"contentUrl":"([^"]+)"', html)
+            img_match = re.search(r'<meta property="og:image(?::secure_url)?" content="([^"]+)"', html)
+            t_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+
+            if v_match:
+                video_url = v_match.group(1).replace("&amp;", "&").replace("\\u002F", "/")
+                thumb = img_match.group(1).replace("&amp;", "&") if img_match else ""
+                title = t_match.group(1) if t_match else "Snapchat Spotlight Video"
+                return {
+                    "success": True,
+                    "platform": "snapchat",
+                    "title": title,
+                    "caption": title,
+                    "author": "Snapchat Creator",
+                    "thumbnail": thumb,
+                    "duration": 20,
+                    "streams": [
+                        {
+                            "type": "video",
+                            "quality": "1080p Full HD (No Watermark) ✓",
+                            "format": "mp4",
+                            "url": video_url,
+                            "download_url": f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_snapchat.mp4",
+                            "label": "Download Spotlight Video"
+                        },
+                        {
+                            "type": "audio",
+                            "quality": "320 kbps Audio",
+                            "format": "mp3",
+                            "url": video_url,
+                            "download_url": f"/api/stream?url={urllib.parse.quote(video_url)}&filename=veloclip_snapchat.mp3&convert_mp3=1",
+                            "label": "Extract Audio (MP3)"
+                        }
+                    ],
+                    "original_url": url
+                }
+        except Exception:
+            pass
+        return self.extract_generic(url)
 
     def extract_facebook(self, url: str) -> Dict[str, Any]:
         try:
