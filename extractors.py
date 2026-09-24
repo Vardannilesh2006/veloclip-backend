@@ -97,49 +97,47 @@ class MediaExtractor:
             except Exception:
                 pass
 
-        # Tier 2: yt-dlp with anti-bot arguments and optional session cookies
+        # Tier 2: yt-dlp with session cookies, and automatic retry without cookies
+        cookie_file = os.environ.get('INSTAGRAM_COOKIES_FILE') or 'ig_cookies.txt'
+        if not os.path.exists(cookie_file) and os.path.exists('cookies.txt'):
+            cookie_file = 'cookies.txt'
+
+        has_ig_cookies = (os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100) or bool(os.environ.get('INSTAGRAM_COOKIES'))
+
+        if has_ig_cookies:
+            try:
+                ydl_opts = dict(self.ydl_opts_base)
+                proxy_info = anti_ban.get_proxy()
+                if proxy_info and 'https' in proxy_info:
+                    ydl_opts['proxy'] = proxy_info['https']
+
+                if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100:
+                    ydl_opts['cookiefile'] = cookie_file
+                elif os.environ.get('INSTAGRAM_COOKIES'):
+                    temp_cookie_path = os.path.join(tempfile.gettempdir(), 'veloclip_ig_cookies.txt')
+                    with open(temp_cookie_path, 'w', encoding='utf-8') as f:
+                        f.write(os.environ['INSTAGRAM_COOKIES'])
+                    ydl_opts['cookiefile'] = temp_cookie_path
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    return self._format_ytdlp_info(info, platform='instagram', original_url=url)
+            except Exception as e:
+                # Cookie may have failed; proceed to try without cookies
+                pass
+
+        # Try yt-dlp without cookies
         try:
-            ydl_opts = dict(self.ydl_opts_base)
-            ydl_opts['http_headers'] = anti_ban.get_instagram_headers(referer=url)
+            ydl_opts_clean = dict(self.ydl_opts_base)
             proxy_info = anti_ban.get_proxy()
             if proxy_info and 'https' in proxy_info:
-                ydl_opts['proxy'] = proxy_info['https']
+                ydl_opts_clean['proxy'] = proxy_info['https']
 
-            cookie_file = os.environ.get('INSTAGRAM_COOKIES_FILE') or 'ig_cookies.txt'
-            if not os.path.exists(cookie_file) and os.path.exists('cookies.txt'):
-                cookie_file = 'cookies.txt'
-
-            # Validate cookies before using them (expired cookies cause hard fails)
-            cookies_valid = False
-            if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100:
-                try:
-                    val_resp = requests.get(
-                        'https://www.instagram.com/api/v1/accounts/current_user/?edit=true',
-                        headers=anti_ban.get_instagram_headers(referer='https://www.instagram.com/'),
-                        cookies={
-                            line.split('\t')[5]: line.split('\t')[6].strip()
-                            for line in open(cookie_file).readlines()
-                            if not line.startswith('#') and line.strip() and len(line.split('\t')) >= 7
-                        },
-                        timeout=4
-                    )
-                    cookies_valid = val_resp.status_code == 200
-                except Exception:
-                    cookies_valid = False
-
-            if cookies_valid:
-                ydl_opts['cookiefile'] = cookie_file
-            elif os.environ.get('INSTAGRAM_COOKIES'):
-                temp_cookie_path = os.path.join(tempfile.gettempdir(), 'veloclip_ig_cookies.txt')
-                with open(temp_cookie_path, 'w', encoding='utf-8') as f:
-                    f.write(os.environ['INSTAGRAM_COOKIES'])
-                ydl_opts['cookiefile'] = temp_cookie_path
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(ydl_opts_clean) as ydl:
                 info = ydl.extract_info(url, download=False)
                 return self._format_ytdlp_info(info, platform='instagram', original_url=url)
         except Exception as e:
-            # Tier 3: Attempt direct webpage metadata scraping
+            # Tier 3: Attempt direct webpage metadata scraping & oEmbed fallback
             return self._scrape_instagram_meta(url, str(e))
 
     def _format_instagram_graphql_data(self, media: Dict[str, Any], original_url: str) -> Dict[str, Any]:
@@ -244,6 +242,37 @@ class MediaExtractor:
                     ],
                     "original_url": url
                 }
+
+            # Fallback to official oEmbed
+            try:
+                oe = requests.get(f"https://api.instagram.com/oembed?url={url}", headers={"User-Agent": "Mozilla/5.0"}, timeout=5).json()
+                if oe.get("title") or oe.get("thumbnail_url"):
+                    thumb = oe.get("thumbnail_url", "")
+                    title = oe.get("title", "Instagram Post")
+                    author = oe.get("author_name", "instagram_creator")
+                    streams = []
+                    if thumb:
+                        streams.append({
+                            "type": "image",
+                            "quality": "Full HD Cover Art",
+                            "format": "jpg",
+                            "url": thumb,
+                            "download_url": f"/api/stream?url={urllib.parse.quote(thumb)}&filename=veloclip_instagram_preview.jpg",
+                            "label": "Download HD Cover Art (JPG)"
+                        })
+                    return {
+                        "success": True,
+                        "platform": "instagram",
+                        "title": title,
+                        "caption": title,
+                        "author": f"@{author}",
+                        "thumbnail": thumb,
+                        "duration": 30,
+                        "streams": streams,
+                        "original_url": url
+                    }
+            except Exception:
+                pass
         except Exception:
             pass
 
