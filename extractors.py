@@ -49,7 +49,7 @@ class MediaExtractor:
             'nocheckcertificate': True,
             'remote_components': ['ejs:github'],
             'js_runtimes': {'node': {}},
-            'socket_timeout': 10,
+            'socket_timeout': 6,
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'ios', 'visionos', 'web'],
@@ -439,7 +439,7 @@ class MediaExtractor:
         ]
         for m in piped_mirrors:
             try:
-                resp = requests.get(f"{m}/streams/{video_id}", headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+                resp = requests.get(f"{m}/streams/{video_id}", headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
                 if resp.status_code == 200:
                     d = resp.json()
                     vstreams = d.get("videoStreams", [])
@@ -511,7 +511,7 @@ class MediaExtractor:
                     # when the Render streaming worker fetches them.
                     f"{instance}/api/v1/videos/{video_id}?local=true",
                     headers=anti_ban.get_generic_headers(referer="https://www.youtube.com/"),
-                    timeout=10,
+                    timeout=3,
                 )
                 if response.status_code != 200:
                     continue
