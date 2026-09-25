@@ -15,7 +15,7 @@ def clean_filename(filename: str) -> str:
     cleaned = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
     return cleaned[:100]
 
-def stream_media(media_url: str, filename: str, content_type: str = "video/mp4", convert_to_mp3: bool = False, start_time: str = None, duration: str = None):
+def stream_media(media_url: str, filename: str, content_type: str = "video/mp4", convert_to_mp3: bool = False, start_time: str = None, duration: str = None, request_range: str = None):
     """
     Zero-Storage Streaming Proxy:
     Streams media chunks directly from upstream CDN to the client browser.
@@ -70,17 +70,26 @@ def stream_media(media_url: str, filename: str, content_type: str = "video/mp4",
 
     # Standard Direct Video/Photo Chunked Streaming
     try:
-        req = requests.get(media_url, headers=headers, stream=True, timeout=15)
+        if request_range:
+            headers["Range"] = request_range
+        req = requests.get(media_url, headers=headers, stream=True, timeout=30)
         if not req.ok:
             return Response("Upstream media is unavailable", status=req.status_code)
+        upstream_type = req.headers.get("Content-Type", "").lower()
+        if upstream_type.startswith("text/") or "json" in upstream_type or "html" in upstream_type:
+            req.close()
+            return Response("Upstream did not return a media file", status=502)
         response_headers = {
             "Content-Disposition": f'attachment; filename="{clean_name}"',
             "Content-Type": req.headers.get("Content-Type", content_type),
             "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "public, max-age=7200"
+            "Cache-Control": "public, max-age=7200",
+            "Accept-Ranges": req.headers.get("Accept-Ranges", "bytes"),
         }
         if "Content-Length" in req.headers:
             response_headers["Content-Length"] = req.headers["Content-Length"]
+        if "Content-Range" in req.headers:
+            response_headers["Content-Range"] = req.headers["Content-Range"]
 
         def generate_chunks() -> Generator[bytes, None, None]:
             for chunk in req.iter_content(chunk_size=128 * 1024):
@@ -89,7 +98,7 @@ def stream_media(media_url: str, filename: str, content_type: str = "video/mp4",
 
         return Response(
             stream_with_context(generate_chunks()),
-            status=req.status_code,
+            status=req.status_code if req.status_code == 206 else 200,
             headers=response_headers
         )
     except Exception as e:

@@ -3,6 +3,8 @@ import json
 import urllib.parse
 import os
 import tempfile
+from typing import Any, Dict, Optional
+
 import requests
 import yt_dlp
 
@@ -750,6 +752,14 @@ class MediaExtractor:
         return self.extract_generic(url)
 
     def extract_snapchat(self, url: str) -> Dict[str, Any]:
+        parsed = urllib.parse.urlparse(url)
+        if not re.search(r'/(spotlight|add|story)/', parsed.path, re.IGNORECASE):
+            return {
+                "success": False,
+                "platform": "snapchat",
+                "error": "Please paste a public Snapchat Spotlight, Story, or shared media URL.",
+            }
+
         # Tier 1: Direct HTML OpenGraph and Video Tags
         try:
             resp = requests.get(url, headers={
@@ -850,6 +860,14 @@ class MediaExtractor:
         }
 
     def extract_pinterest(self, url: str) -> Dict[str, Any]:
+        source_path = urllib.parse.urlparse(url).path
+        if "pin.it" not in url.lower() and not re.search(r'/pin/\d+', source_path, re.IGNORECASE):
+            return {
+                "success": False,
+                "platform": "pinterest",
+                "error": "Please paste a specific Pinterest pin URL, not the Pinterest homepage.",
+            }
+
         canonical_url = url
         try:
             if "pin.it" in url:
@@ -861,6 +879,12 @@ class MediaExtractor:
 
             pin_match = re.search(r'/pin/(\d+)', canonical_url)
             pin_id = pin_match.group(1) if pin_match else None
+            if not pin_id:
+                return {
+                    "success": False,
+                    "platform": "pinterest",
+                    "error": "Please paste a specific Pinterest pin URL, not the Pinterest homepage.",
+                }
 
             title = "Pinterest Pin"
             author = "Pinterest Creator"

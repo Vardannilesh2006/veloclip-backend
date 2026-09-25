@@ -50,6 +50,24 @@ def is_public_http_url(url: str) -> bool:
     except ValueError:
         return False
 
+def has_supported_media_path(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    if "pinterest." in host or host == "pin.it":
+        return "pin.it" in host or bool(re.search(r"/pin/\d+", path))
+    if "snapchat." in host or host == "snap.com":
+        return bool(re.search(r"/(spotlight|add|story)/", path))
+    if "reddit." in host or host == "redd.it":
+        return "redd.it" in host or "/comments/" in path
+    if "twitter." in host or host == "x.com":
+        return bool(re.search(r"/status/\d+", path))
+    if "instagram." in host or host == "instagr.am":
+        return bool(re.search(r"/(reel|reels|p|tv)/[A-Za-z0-9_-]+", path))
+    if "facebook." in host or host in {"fb.watch", "fb.com"}:
+        return bool(re.search(r"/(reel|reels|watch|videos?)/", path)) or host == "fb.watch"
+    return True
+
 def init_cookie_files():
     if os.environ.get("YOUTUBE_COOKIES") and (not os.path.exists("cookies.txt") or os.path.getsize("cookies.txt") < 50):
         try:
@@ -223,6 +241,16 @@ def extract_media():
 
     if not url:
         return jsonify({"success": False, "error": "URL parameter is required"}), 400
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+        return jsonify({"success": False, "error": "A valid public HTTP(S) URL is required"}), 400
+    if len(url) > 2000:
+        return jsonify({"success": False, "error": "URL is too long"}), 400
+    if not has_supported_media_path(url):
+        return jsonify({
+            "success": False,
+            "error": "Please paste a specific public media post URL, not a platform homepage.",
+        }), 400
 
     # Fast In-Memory LRU Cache check (skips upstream extraction and rate limits)
     cached_data = _get_cached_media(url)
@@ -320,6 +348,7 @@ def proxy_stream():
     convert_mp3 = request.args.get("convert_mp3") == "1"
     start_time = request.args.get("ss")
     duration = request.args.get("t")
+    request_range = request.headers.get("Range")
 
     if not media_url:
         return "Missing media URL", 400
@@ -327,7 +356,7 @@ def proxy_stream():
         return jsonify({"success": False, "error": "Only public HTTP(S) media URLs are allowed."}), 400
 
     content_type = "audio/mpeg" if convert_mp3 else "video/mp4"
-    return stream_media(media_url, filename=filename, content_type=content_type, convert_to_mp3=convert_mp3, start_time=start_time, duration=duration)
+    return stream_media(media_url, filename=filename, content_type=content_type, convert_to_mp3=convert_mp3, start_time=start_time, duration=duration, request_range=request_range)
 
 @app.route('/api/download', methods=['GET'])
 def verified_download():

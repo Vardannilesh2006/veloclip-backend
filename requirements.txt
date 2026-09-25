@@ -3,6 +3,7 @@ flask-cors
 requests
 # Pin latest 2026 extractor release to ensure YouTube & Instagram format support
 yt-dlp>=2026.8.19
+yt-dlp-ejs>=0.8.0
 python-dotenv
 gunicorn
 imageio-ffmpeg
