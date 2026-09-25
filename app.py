@@ -342,7 +342,7 @@ def verified_download():
     audio_only = request.args.get("audio_only") == "1"
     if not source_url or not format_id:
         return jsonify({"success": False, "error": "Missing source URL or format."}), 400
-    if not re.fullmatch(r"[A-Za-z0-9+._-]+", format_id):
+    if not re.match(r'^[A-Za-z0-9+._/\[\]<>=!,@\s-]+$', format_id) or len(format_id) > 200:
         return jsonify({"success": False, "error": "Invalid media format."}), 400
     if not is_public_http_url(source_url):
         return jsonify({"success": False, "error": "Invalid media source URL."}), 400

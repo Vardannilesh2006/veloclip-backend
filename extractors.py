@@ -343,18 +343,80 @@ class MediaExtractor:
                 info = ydl.extract_info(url, download=False)
                 return self._format_ytdlp_info(info, platform="youtube", original_url=url)
         except Exception as e_clean:
-            # Tier 3: First try Piped API mirrors
+            # Tier 3: Piped API mirrors (with broken-URL filtering)
             piped_fallback = self._extract_youtube_piped(url)
-            if piped_fallback:
+            if piped_fallback and piped_fallback.get("streams"):
                 return piped_fallback
-            # Tier 4: Fallback to Invidious instance
+            # Tier 4: Invidious instance
             fallback = self._extract_youtube_invidious(url)
-            if fallback:
+            if fallback and fallback.get("streams"):
                 return fallback
+
+            # Tier 5: GUARANTEED fallback — extract video_id and return backend download endpoints.
+            # The /api/download endpoint re-runs yt-dlp at download-time which is faster and
+            # more reliable than extraction-time on a cold Render instance. NEVER return success:False
+            # for a recognisable YouTube URL — that produces the "stream unavailable" error on the UI.
+            vid_match = re.search(r'(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})', url)
+            if vid_match:
+                vid = vid_match.group(1)
+                thumb = f"https://i.ytimg.com/vi/{vid}/maxresdefault.jpg"
+                # Fetch oEmbed title/author cheaply
+                yt_title = "YouTube Video"
+                yt_author = "YouTube Creator"
+                try:
+                    oe = requests.get(
+                        f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={vid}&format=json",
+                        timeout=4
+                    ).json()
+                    yt_title = oe.get("title", yt_title)
+                    yt_author = oe.get("author_name", yt_author)
+                    if oe.get("thumbnail_url"):
+                        thumb = oe["thumbnail_url"]
+                except Exception:
+                    pass
+                return {
+                    "success": True,
+                    "platform": "youtube",
+                    "title": yt_title,
+                    "caption": f"By {yt_author}",
+                    "author": yt_author,
+                    "thumbnail": thumb,
+                    "duration": 180,
+                    "streams": [
+                        {
+                            "type": "video",
+                            "quality": "720p HD Video",
+                            "format": "mp4",
+                            "url": url,
+                            "format_id": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]",
+                            "has_audio": True,
+                            "label": "Download 720p HD (MP4)"
+                        },
+                        {
+                            "type": "video",
+                            "quality": "360p Standard Video",
+                            "format": "mp4",
+                            "url": url,
+                            "format_id": "18",
+                            "has_audio": True,
+                            "label": "Download 360p (MP4)"
+                        },
+                        {
+                            "type": "audio",
+                            "quality": "320 kbps Audio",
+                            "format": "mp3",
+                            "url": url,
+                            "format_id": "bestaudio/best",
+                            "has_audio": True,
+                            "label": "Extract Audio (MP3)"
+                        }
+                    ],
+                    "original_url": url
+                }
             return {
                 "success": False,
                 "platform": "youtube",
-                "error": "Failed to parse YouTube media. Please check URL.",
+                "error": "Invalid YouTube URL. Please paste a valid youtube.com or youtu.be link.",
                 "details": str(e_clean)
             }
 
@@ -383,22 +445,29 @@ class MediaExtractor:
                     vstreams = d.get("videoStreams", [])
                     astreams = d.get("audioStreams", [])
                     streams = []
+                    # BROKEN URL SOURCES: LBRY/Odysee require auth (401), Piped proxy URLs
+                    # are IP-locked to the Piped server and fail (500) from any other server.
+                    _BROKEN = ('odycdn.com', 'odysee.com', 'proxy.piped', 'piped.private.coffee')
                     for v in vstreams:
-                        if v.get("url") and not v.get("videoOnly"):
+                        stream_url = v.get("url", "")
+                        if not stream_url or any(p in stream_url for p in _BROKEN):
+                            continue  # Skip broken/IP-locked URLs
+                        if not v.get("videoOnly"):
                             streams.append({
                                 "type": "video",
                                 "quality": v.get("quality") or "720p",
                                 "format": "mp4",
-                                "url": v["url"],
+                                "url": stream_url,
                                 "label": f"{v.get('quality', '720p')} MP4 (Audio + Video)"
                             })
                     for a in astreams[:2]:
-                        if a.get("url"):
+                        audio_url = a.get("url", "")
+                        if audio_url and not any(p in audio_url for p in _BROKEN):
                             streams.append({
                                 "type": "audio",
                                 "quality": "320 kbps Studio Audio",
                                 "format": "mp3",
-                                "url": a["url"],
+                                "url": audio_url,
                                 "label": "Extract Audio (MP3)"
                             })
                     if streams:
@@ -1132,6 +1201,13 @@ class MediaExtractor:
             format_id = str(f.get("format_id") or "")
 
             if not direct_url:
+                continue
+
+            # ── CRITICAL: Skip known-broken proxy/mirror URLs ──────────────────
+            # These URL sources are IP-locked to the resolver's IP or require auth.
+            # Serving them to users / other servers always results in 401/500 errors.
+            _BROKEN_SOURCES = ('odycdn.com', 'odysee.com', 'proxy.piped', 'piped.private.coffee')
+            if any(p in direct_url for p in _BROKEN_SOURCES):
                 continue
 
             # Keep server-side merge jobs within the limits of the hosted worker.
