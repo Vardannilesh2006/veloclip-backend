@@ -356,6 +356,11 @@ def verified_download():
             "remote_components": ["ejs:github"],
             "js_runtimes": {"node": {}},
             "ffmpeg_location": FFMPEG_BIN,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "visionos", "web"],
+                }
+            },
         }
         is_ig = "instagram.com" in source_url or "instagr.am" in source_url
         cookie_file = "ig_cookies.txt" if is_ig else "cookies.txt"

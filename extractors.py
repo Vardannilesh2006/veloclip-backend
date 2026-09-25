@@ -49,6 +49,12 @@ class MediaExtractor:
             'nocheckcertificate': True,
             'remote_components': ['ejs:github'],
             'js_runtimes': {'node': {}},
+            'socket_timeout': 10,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'visionos', 'web'],
+                }
+            }
         }
 
     def extract(self, url: str) -> Dict[str, Any]:
