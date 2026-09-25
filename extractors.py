@@ -77,32 +77,45 @@ class MediaExtractor:
 
     def extract_instagram(self, url: str) -> Dict[str, Any]:
         shortcode = extract_instagram_shortcode(url)
-        
-        # Tier 1: Try Mobile Web GraphQL with 2026 doc_id
+        # Resolve active session from burner pool or env
+        active_session = anti_ban.get_instagram_session()
+
+        # Tier 1: Try Mobile Web GraphQL with 2026 doc_id & active burner session
         if shortcode:
-            try:
-                headers = anti_ban.get_instagram_headers(referer=url)
-                doc_ids = ["9510064595728286", "17867956176966166"]
-                for doc_id in doc_ids:
-                    try:
-                        api_url = f"https://www.instagram.com/graphql/query/?doc_id={doc_id}&variables={{\"shortcode\":\"{shortcode}\"}}"
-                        resp = requests.get(api_url, headers=headers, timeout=6)
-                        if resp.status_code == 200:
-                            data = resp.json()
+            doc_ids = ["9510064595728286", "17867956176966166"]
+            for doc_id in doc_ids:
+                try:
+                    headers = anti_ban.get_instagram_headers(referer=url)
+                    cookies = {}
+                    if active_session:
+                        cookies["sessionid"] = active_session
+                        headers["Cookie"] = f"sessionid={active_session}"
+
+                    api_url = f"https://www.instagram.com/graphql/query/?doc_id={doc_id}&variables={{\"shortcode\":\"{shortcode}\"}}"
+                    resp = requests.get(api_url, headers=headers, cookies=cookies, timeout=6)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("require_login") or data.get("message") == "checkpoint_required":
+                            if active_session:
+                                anti_ban.quarantine_session(active_session)
+                                active_session = anti_ban.get_instagram_session()
+                        else:
                             shortcode_media = data.get("data", {}).get("xdt_shortcode_media") or data.get("data", {}).get("shortcode_media")
                             if shortcode_media:
                                 return self._format_instagram_graphql_data(shortcode_media, url)
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+                    elif resp.status_code in (401, 403):
+                        if active_session:
+                            anti_ban.quarantine_session(active_session)
+                            active_session = anti_ban.get_instagram_session()
+                except Exception:
+                    continue
 
         # Tier 2: yt-dlp with session cookies, and automatic retry without cookies
         cookie_file = os.environ.get('INSTAGRAM_COOKIES_FILE') or 'ig_cookies.txt'
         if not os.path.exists(cookie_file) and os.path.exists('cookies.txt'):
             cookie_file = 'cookies.txt'
 
-        has_ig_cookies = (os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100) or bool(os.environ.get('INSTAGRAM_COOKIES'))
+        has_ig_cookies = (os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100) or bool(os.environ.get('INSTAGRAM_COOKIES')) or bool(active_session)
 
         if has_ig_cookies:
             try:
@@ -111,7 +124,12 @@ class MediaExtractor:
                 if proxy_info and 'https' in proxy_info:
                     ydl_opts['proxy'] = proxy_info['https']
 
-                if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100:
+                if active_session:
+                    temp_cookie_path = os.path.join(tempfile.gettempdir(), f'veloclip_ig_sess_{active_session[:8]}.txt')
+                    with open(temp_cookie_path, 'w', encoding='utf-8') as f:
+                        f.write(f".instagram.com\tTRUE\t/\tTRUE\t2147483647\tsessionid\t{active_session}\n")
+                    ydl_opts['cookiefile'] = temp_cookie_path
+                elif os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 100:
                     ydl_opts['cookiefile'] = cookie_file
                 elif os.environ.get('INSTAGRAM_COOKIES'):
                     temp_cookie_path = os.path.join(tempfile.gettempdir(), 'veloclip_ig_cookies.txt')
@@ -123,7 +141,10 @@ class MediaExtractor:
                     info = ydl.extract_info(url, download=False)
                     return self._format_ytdlp_info(info, platform='instagram', original_url=url)
             except Exception as e:
-                # Cookie may have failed; proceed to try without cookies
+                err_str = str(e).lower()
+                if "login" in err_str or "checkpoint" in err_str or "401" in err_str or "403" in err_str:
+                    if active_session:
+                        anti_ban.quarantine_session(active_session)
                 pass
 
         # Try yt-dlp without cookies

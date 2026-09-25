@@ -68,6 +68,7 @@ init_cookie_files()
 
 # ── In-memory platform success/fail counters (reset on restart) ─────────────
 import threading
+import time
 from datetime import datetime
 
 _stats_lock = threading.Lock()
@@ -80,6 +81,40 @@ def _record_stat(platform: str, success: bool):
         key = "success" if success else "fail"
         PLATFORM_STATS[platform][key] += 1
         PLATFORM_STATS[platform]["last_seen"] = datetime.utcnow().isoformat() + "Z"
+
+# ── In-Memory 6-Hour Viral Media LRU Cache ──────────────────────────────────
+_cache_lock = threading.Lock()
+_MEDIA_CACHE: dict = {}  # normalized_url -> {"data": dict, "created_at": float, "expires_at": float}
+_CACHE_TTL = 6 * 3600    # 6 hours in seconds
+_MAX_CACHE_ITEMS = 500
+
+def _normalize_cache_key(url: str) -> str:
+    cleaned = url.strip().split("?")[0].rstrip("/").lower()
+    return cleaned
+
+def _get_cached_media(url: str):
+    key = _normalize_cache_key(url)
+    with _cache_lock:
+        entry = _MEDIA_CACHE.get(key)
+        if not entry:
+            return None
+        if time.time() > entry["expires_at"]:
+            del _MEDIA_CACHE[key]
+            return None
+        return entry["data"]
+
+def _set_cached_media(url: str, data: dict):
+    key = _normalize_cache_key(url)
+    with _cache_lock:
+        if len(_MEDIA_CACHE) >= _MAX_CACHE_ITEMS:
+            # Evict oldest entry
+            oldest = min(_MEDIA_CACHE.keys(), key=lambda k: _MEDIA_CACHE[k]["created_at"])
+            del _MEDIA_CACHE[oldest]
+        _MEDIA_CACHE[key] = {
+            "data": data,
+            "created_at": time.time(),
+            "expires_at": time.time() + _CACHE_TTL
+        }
 
 # ── Concurrency semaphore (max 2 concurrent extraction jobs) ─────────────────
 import threading as _threading
@@ -95,15 +130,46 @@ def health_check():
         "service": "VeloClip Core Engine (2026 Edition)",
         "version": "3.0.0",
         "supported_platforms": ["instagram", "youtube", "facebook", "whatsapp", "twitter", "tiktok", "snapchat", "pinterest", "reddit"],
-        "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp", "job_queue", "platform_stats"]
+        "features": ["temporary_media_processing", "audio_video_muxing", "ai_subtitles", "audio_extract", "full_hd_dp", "job_queue", "platform_stats", "lru_cache", "burner_session_pool"]
     })
+
+@app.route('/api/sessions/status', methods=['GET'])
+def session_status():
+    from anti_ban import anti_ban
+    with _cache_lock:
+        cached_count = len(_MEDIA_CACHE)
+    return jsonify({
+        "session_pool": anti_ban.get_session_pool_status(),
+        "cache": {
+            "total_cached_items": cached_count,
+            "ttl_hours": 6,
+            "max_items": _MAX_CACHE_ITEMS
+        },
+        "server_status": "online"
+    })
+
+@app.route('/api/sessions/update', methods=['POST'])
+def session_update():
+    from anti_ban import anti_ban
+    body = request.get_json(silent=True) or {}
+    session_id = body.get("session_id", "").strip()
+    sessions = body.get("sessions", [])
+    if session_id:
+        anti_ban.add_session(session_id)
+        return jsonify({"success": True, "message": "Session added to pool", "pool": anti_ban.get_session_pool_status()})
+    elif sessions and isinstance(sessions, list):
+        anti_ban.set_session_pool(sessions)
+        return jsonify({"success": True, "message": "Session pool updated", "pool": anti_ban.get_session_pool_status()})
+    return jsonify({"success": False, "error": "session_id string or sessions array required"}), 400
 
 @app.route('/api/cookies/status', methods=['GET'])
 def cookies_status():
+    from anti_ban import anti_ban
     yt_has_file = os.path.exists("cookies.txt") and os.path.getsize("cookies.txt") > 50
     ig_has_file = os.path.exists("ig_cookies.txt") and os.path.getsize("ig_cookies.txt") > 50
     yt_has_env = bool(os.environ.get("YOUTUBE_COOKIES"))
     ig_has_env = bool(os.environ.get("INSTAGRAM_COOKIES"))
+    pool_status = anti_ban.get_session_pool_status()
     return jsonify({
         "youtube": {
             "has_file": yt_has_file,
@@ -113,7 +179,8 @@ def cookies_status():
         "instagram": {
             "has_file": ig_has_file,
             "has_env": ig_has_env,
-            "ready": ig_has_file or ig_has_env
+            "pool_status": pool_status,
+            "ready": ig_has_file or ig_has_env or pool_status["has_available_session"]
         },
         "server_version": "3.0.0"
     })
@@ -156,6 +223,13 @@ def extract_media():
 
     if not url:
         return jsonify({"success": False, "error": "URL parameter is required"}), 400
+
+    # Fast In-Memory LRU Cache check (skips upstream extraction and rate limits)
+    cached_data = _get_cached_media(url)
+    if cached_data:
+        resp_data = dict(cached_data)
+        resp_data["cached"] = True
+        return jsonify(resp_data)
 
     # Enforce max 2 concurrent extractions to protect Render free tier RAM
     global _active_jobs, _waiting_jobs
@@ -222,6 +296,7 @@ def extract_media():
                         }
                         stream["download_url"] = f"/api/stream?{urllib.parse.urlencode(proxy_query)}"
 
+            _set_cached_media(url, result)
             return jsonify(result)
         else:
             return jsonify(result), 422
